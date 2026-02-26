@@ -16,7 +16,11 @@ export const EXCHANGE_RATE = 7.2
 
 export function setupNewApiRoutes(app) {
   const pgPool = new Pool({
-    connectionString: process.env.NEWAPI_PG_URL,
+    host: process.env.NEWAPI_DB_HOST || 'localhost',
+    port: parseInt(process.env.NEWAPI_DB_PORT || '5432'),
+    user: process.env.NEWAPI_DB_USER,
+    password: process.env.NEWAPI_DB_PASSWORD,
+    database: process.env.NEWAPI_DB_NAME,
     max: 10,
     idleTimeoutMillis: 30000
   })

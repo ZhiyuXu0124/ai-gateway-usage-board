@@ -9,7 +9,7 @@
 
 **双数据源 LLM API 网关用量分析与成本估算平台**
 
-[English](#english) | 中文
+[English](README_EN.md) | 中文
 
 </div>
 
@@ -53,18 +53,25 @@ cp .env.example .env
 
 ```env
 # MySQL - OneAPI
-DB_HOST=your_mysql_host
+DB_HOST=localhost
 DB_PORT=3306
-DB_USER=your_user
-DB_PASSWORD=your_password
+DB_USER=your_mysql_user
+DB_PASSWORD=your_mysql_password
 DB_NAME=oneapi
 
 # PostgreSQL - NewAPI
-NEWAPI_PG_URL=postgresql://user:pass@host:5432/new_api
+NEWAPI_DB_HOST=localhost
+NEWAPI_DB_PORT=5432
+NEWAPI_DB_USER=your_pg_user
+NEWAPI_DB_PASSWORD=your_pg_password
+NEWAPI_DB_NAME=new_api
 
 # 飞书通知 (可选)
 FEISHU_WEBHOOK_URL=your_feishu_webhook
 FEISHU_ALERT_THRESHOLD=150
+
+# 服务端口
+PORT=3001
 ```
 
 ### 3. 启动开发服务器
@@ -97,6 +104,8 @@ npm run server
 │   ├── App.jsx            # OneAPI 看板（浅色主题）
 │   ├── NewApiDashboard.jsx # NewAPI 看板（深色主题）
 │   └── PriceConfig.jsx    # 价格配置页面
+├── README.md              # 中文文档
+├── README_EN.md           # English Documentation
 ├── .env.example           # 环境变量示例
 └── package.json
 ```
@@ -134,146 +143,6 @@ server: {
 ```
 
 Express 默认监听 `0.0.0.0:3001`。
-
-## License
-
-MIT
-
----
-
-<a name="english"></a>
-
-# LLM API Usage Dashboard
-
-<div align="center">
-
-**Dual-Data-Source LLM API Gateway Analytics & Cost Estimation Platform**
-
-中文 | [English](#english)
-
-</div>
-
----
-
-## Features
-
-- **Dual Data Sources**: Connect to both OneAPI (MySQL) and NewAPI (PostgreSQL) usage logs
-- **Real-time Cost Calculation**: Token cost calculation based on model ratios (USD/CNY auto-conversion)
-- **Multi-dimensional Analytics**: Today overview, 30-day trends, model distribution, token leaderboards
-- **Feishu Notifications**: Daily scheduled usage reports with over-threshold alerts
-- **Price Configuration**: Sync latest model pricing from models.dev
-- **Responsive Design**: Dual themes (OneAPI Light / NewAPI Cyber Dark)
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 18 + Vite + TailwindCSS + Recharts |
-| Backend | Express + node-cron |
-| Database | MySQL2 (OneAPI) + PostgreSQL (NewAPI) |
-| Deployment | LAN access supported |
-
-## Quick Start
-
-### 1. Install Dependencies
-
-```bash
-npm install
-```
-
-### 2. Environment Configuration
-
-Copy the example config and fill in your actual parameters:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```env
-# MySQL - OneAPI
-DB_HOST=your_mysql_host
-DB_PORT=3306
-DB_USER=your_user
-DB_PASSWORD=your_password
-DB_NAME=oneapi
-
-# PostgreSQL - NewAPI
-NEWAPI_PG_URL=postgresql://user:pass@host:5432/new_api
-
-# Feishu Notification (optional)
-FEISHU_WEBHOOK_URL=your_feishu_webhook
-FEISHU_ALERT_THRESHOLD=150
-```
-
-### 3. Start Development Server
-
-```bash
-npm run dev
-```
-
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:3001
-
-### 4. Production Build
-
-```bash
-npm run build
-npm run server
-```
-
-## Project Structure
-
-```
-.
-├── server/
-│   ├── index.js           # Express entry + MySQL routes
-│   ├── newapi.js          # NewAPI PostgreSQL routes + cost calc
-│   ├── feishu-notify.js   # Feishu scheduled notifications
-│   └── model-prices.json  # Local price database
-├── src/
-│   ├── main.jsx           # Router config
-│   ├── App.jsx            # OneAPI dashboard (light theme)
-│   ├── NewApiDashboard.jsx # NewAPI dashboard (dark theme)
-│   └── PriceConfig.jsx    # Price configuration page
-├── .env.example           # Environment variables example
-└── package.json
-```
-
-## Core Features
-
-### Cost Calculation Formula
-
-**OneAPI**: Fixed price ($/1M tokens)
-```
-Cost = (promptTokens × inputPrice + completionTokens × outputPrice) / 1_000_000
-```
-
-**NewAPI**: Ratio-based
-```
-Cost = (promptTokens × ratio + completionTokens × ratio × completionRatio) × BASE_PRICE × EXCHANGE_RATE
-```
-
-### Feishu Notifications
-
-- Daily reports at 17:00
-- Filter tokens exceeding threshold
-- Includes: active tokens, total calls, token count, total cost
-- Manual test: `GET /api/newapi/test-notify?date=2026-02-01`
-
-## LAN Access Configuration
-
-Modify `vite.config.js`:
-
-```javascript
-server: {
-  host: '0.0.0.0',  // Allow LAN access
-  port: 5173
-}
-```
-
-Express listens on `0.0.0.0:3001` by default.
 
 ## License
 
