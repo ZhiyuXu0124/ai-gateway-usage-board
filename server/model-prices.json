@@ -1,0 +1,442 @@
+{
+  "gpt-4o": {
+    "input": 2.5,
+    "output": 10
+  },
+  "gpt-4o-mini": {
+    "input": 2.5,
+    "output": 10
+  },
+  "gpt-4-turbo": {
+    "input": 9,
+    "output": 27
+  },
+  "gpt-4": {
+    "input": 2.5,
+    "output": 10
+  },
+  "gpt-3.5-turbo": {
+    "input": 0.45,
+    "output": 1.4
+  },
+  "claude-3-opus": {
+    "input": 15,
+    "output": 75
+  },
+  "claude-3-sonnet": {
+    "input": 3,
+    "output": 15
+  },
+  "claude-3-haiku": {
+    "input": 0.25,
+    "output": 1.25
+  },
+  "claude-3-5-sonnet": {
+    "input": 3,
+    "output": 15
+  },
+  "deepseek-chat": {
+    "input": 0.28,
+    "output": 0.42
+  },
+  "deepseek-reasoner": {
+    "input": 0.56,
+    "output": 1.68
+  },
+  "deepseek-v3": {
+    "input": 0.29,
+    "output": 0.43
+  },
+  "gemini-pro": {
+    "input": 0.5,
+    "output": 1.5
+  },
+  "gemini-2.5-flash": {
+    "input": 0.075,
+    "output": 0.3
+  },
+  "gemini-2.5-pro": {
+    "input": 1.25,
+    "output": 5
+  },
+  "qwen-plus": {
+    "input": 0.115,
+    "output": 0.287
+  },
+  "qwen-max": {
+    "input": 0.343,
+    "output": 1.372
+  },
+  "glm-4": {
+    "input": 0,
+    "output": 0
+  },
+  "text-embedding-3-small": {
+    "input": 0.02,
+    "output": 0
+  },
+  "text-embedding-3-large": {
+    "input": 0.13,
+    "output": 0
+  },
+  "test-model-001": {
+    "input": 0.5,
+    "output": 1.5
+  },
+  "bge-m3": {
+    "input": 0,
+    "output": 0
+  },
+  "deepseek-ai/DeepSeek-R1": {
+    "input": 0.8,
+    "output": 2.4
+  },
+  "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
+    "input": 0.287,
+    "output": 0.861
+  },
+  "deepseek-ai/DeepSeek-V3.2-Exp": {
+    "input": 0.58,
+    "output": 1.68
+  },
+  "deepseek-ai/deepseek-vl2": {
+    "input": 0.15,
+    "output": 0.15
+  },
+  "deepseek-coder": {
+    "input": 0,
+    "output": 0
+  },
+  "deepseek-ocr": {
+    "input": 0.03,
+    "output": 0.03
+  },
+  "deepseek-r1": {
+    "input": 0.287,
+    "output": 0.861
+  },
+  "deepseek-r1-0528": {
+    "input": 0.8,
+    "output": 2.4
+  },
+  "deepseek-r1-250528": {
+    "input": 1.35,
+    "output": 5.4
+  },
+  "deepseek-r1-671b": {
+    "input": 1.35,
+    "output": 5.4
+  },
+  "deepseek-r1-671b-sglang": {
+    "input": 1.35,
+    "output": 5.4
+  },
+  "deepseek-r1-reasoning": {
+    "input": 1.35,
+    "output": 5.4
+  },
+  "deepseek-r1-voc": {
+    "input": 1.35,
+    "output": 5.4
+  },
+  "deepseek-v3-1-250821": {
+    "input": 0,
+    "output": 0
+  },
+  "deepseek-v3-1-terminus": {
+    "input": 0,
+    "output": 0
+  },
+  "deepseek-v3-250324": {
+    "input": 0,
+    "output": 0
+  },
+  "deepseek-v3.2": {
+    "input": 0.29,
+    "output": 0.43
+  },
+  "deepseek-vl2": {
+    "input": 0.15,
+    "output": 0.15
+  },
+  "doubao-seed-code-preview-251028": {
+    "input": 0.17,
+    "output": 1.14
+  },
+  "gpt-3.5": {
+    "input": 0.45,
+    "output": 1.4
+  },
+  "gpt-4.1": {
+    "input": 0.1,
+    "output": 0.4
+  },
+  "gpt-4.1-lce-old": {
+    "input": 2,
+    "output": 8
+  },
+  "gpt-4.1-mini-lce": {
+    "input": 0.4,
+    "output": 1.6
+  },
+  "gpt-4.5-preview": {
+    "input": 60,
+    "output": 120
+  },
+  "gpt-4%2E1-lce": {
+    "input": 60,
+    "output": 120
+  },
+  "gpt-4%2E1-mini-lce": {
+    "input": 60,
+    "output": 120
+  },
+  "gpt-4o-lce": {
+    "input": 2.5,
+    "output": 10
+  },
+  "gpt-4o-mini-lce": {
+    "input": 2.5,
+    "output": 10
+  },
+  "gpt-5": {
+    "input": 0.05,
+    "output": 0.4
+  },
+  "gpt-5-chat": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-5-chat-lce": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-5-lce": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-5-mini": {
+    "input": 0.25,
+    "output": 2
+  },
+  "gpt-5-mini-lce": {
+    "input": 0.25,
+    "output": 2
+  },
+  "gpt-5-nano": {
+    "input": 0.05,
+    "output": 0.4
+  },
+  "gpt-5-nano-lce": {
+    "input": 0.05,
+    "output": 0.4
+  },
+  "gpt-5.1": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-5.1-chat": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-5.2": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-5%2E1-chat": {
+    "input": 1.25,
+    "output": 10
+  },
+  "gpt-oss-120b": {
+    "input": 0.25,
+    "output": 0.69
+  },
+  "kimi-k2-250711": {
+    "input": 0,
+    "output": 0
+  },
+  "moonshotai/Kimi-K2-Instruct": {
+    "input": 0.551,
+    "output": 2.646
+  },
+  "o3": {
+    "input": 0.25,
+    "output": 0.25
+  },
+  "qwen-deep-research": {
+    "input": 7.742,
+    "output": 23.367
+  },
+  "qwen-max-latest": {
+    "input": 0.343,
+    "output": 1.372
+  },
+  "qwen-turbo": {
+    "input": 0.044,
+    "output": 0.087
+  },
+  "qwen-turbo-latest": {
+    "input": 0.044,
+    "output": 0.087
+  },
+  "qwen-vl-max": {
+    "input": 0.23,
+    "output": 0.574
+  },
+  "qwen-vl-max-latest": {
+    "input": 0.23,
+    "output": 0.574
+  },
+  "qwen-vl-plus": {
+    "input": 0.115,
+    "output": 0.287
+  },
+  "qwen-vl-plus-latest": {
+    "input": 0.115,
+    "output": 0.287
+  },
+  "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+    "input": 0.08,
+    "output": 0.29
+  },
+  "Qwen/Qwen3-Coder-480B-A35B-Instruct": {
+    "input": 0.82,
+    "output": 3.29
+  },
+  "qwen2.5-72b": {
+    "input": 0.59,
+    "output": 0.59
+  },
+  "qwen2.5-72b-instruct": {
+    "input": 0.59,
+    "output": 0.59
+  },
+  "qwen3-235b-a22b": {
+    "input": 0.75,
+    "output": 2.25
+  },
+  "qwen3-235b-a22b-instruct": {
+    "input": 0.75,
+    "output": 2.25
+  },
+  "qwen3-235b-a22b-instruct-2507": {
+    "input": 0.75,
+    "output": 2.25
+  },
+  "qwen3-235b-a22b-openai": {
+    "input": 0.287,
+    "output": 1.147
+  },
+  "qwen3-235b-a22b-thinking-openai": {
+    "input": 0.287,
+    "output": 1.147
+  },
+  "qwen3-30b-a3b-openai": {
+    "input": 0.08,
+    "output": 0.29
+  },
+  "qwen3-30b-a3b-thinking-openai": {
+    "input": 0.08,
+    "output": 0.29
+  },
+  "qwen3-32b": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-32b-reasoning": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-4b": {
+    "input": 0.03,
+    "output": 0.03
+  },
+  "qwen3-4b-instruct": {
+    "input": 0.05,
+    "output": 0.15
+  },
+  "Qwen3-coder": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-coder-480b-a35b-instruct": {
+    "input": 0.82,
+    "output": 3.29
+  },
+  "qwen3-coder-plus": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-embedding-4b": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-max": {
+    "input": 0.86,
+    "output": 3.43
+  },
+  "qwen3-max-openai": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-vl-32b-instruct": {
+    "input": 0.2,
+    "output": 0.6
+  },
+  "qwen3-vl-plus": {
+    "input": 0,
+    "output": 0
+  },
+  "qwq-32b-preview": {
+    "input": 0.287,
+    "output": 0.861
+  },
+  "THUDM/GLM-4-32B-0414": {
+    "input": 0.27,
+    "output": 0.27
+  },
+  "THUDM/GLM-4-9B-0414": {
+    "input": 0.086,
+    "output": 0.086
+  },
+  "THUDM/GLM-Z1-9B-0414": {
+    "input": 0.086,
+    "output": 0.086
+  },
+  "zai-org/GLM-4.6": {
+    "input": 0.6,
+    "output": 2.2
+  },
+  "bge-large-zh": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen2-72b": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen2-7b": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen2.5-72b-int4": {
+    "input": 0,
+    "output": 0
+  },
+  "qwen3-reranker-4b": {
+    "input": 0,
+    "output": 0
+  },
+  "showcai-108b": {
+    "input": 0,
+    "output": 0
+  },
+  "showcai-gateway-model": {
+    "input": 0,
+    "output": 0
+  },
+  "showcai108b": {
+    "input": 0,
+    "output": 0
+  }
+}
