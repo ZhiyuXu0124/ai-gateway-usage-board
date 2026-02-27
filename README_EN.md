@@ -90,6 +90,31 @@ npm run build
 npm run server
 ```
 
+### 5. One-Command Docker Compose Startup
+
+This project can be packaged as a single image and started via Docker Compose (app container only; databases are external):
+
+```bash
+docker compose up -d --build
+```
+
+After startup:
+
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:3001
+
+Stop all services:
+
+```bash
+docker compose down
+```
+
+Notes:
+
+- Compose does not start MySQL/PostgreSQL; provide reachable external database instances first.
+- The app reads external DB config from `.env` via `env_file` in `docker-compose.yml`.
+- You can override defaults in `environment` (e.g., `PORT`, `FEISHU_ALERT_THRESHOLD`).
+
 ## Project Structure
 
 ```

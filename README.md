@@ -92,6 +92,31 @@ npm run build
 npm run server
 ```
 
+### 5. Docker Compose 一键启动
+
+项目已支持打包为单镜像并通过 Docker Compose 一键启动（仅应用容器，数据库使用外部实例）：
+
+```bash
+docker compose up -d --build
+```
+
+启动后访问：
+
+- 前端: http://localhost:5173
+- 后端 API: http://localhost:3001
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+说明：
+
+- 数据库不会在 Compose 中启动，需先准备可访问的 MySQL 与 PostgreSQL。
+- 应用通过 `docker-compose.yml` 的 `env_file: .env` 读取外部数据库连接配置。
+- 可在 `docker-compose.yml` 的 `environment` 中覆盖默认值（如 `PORT`、`FEISHU_ALERT_THRESHOLD`）。
+
 ## 项目结构
 
 ```
