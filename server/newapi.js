@@ -10,6 +10,19 @@ let pricingConfig = {
 }
 
 const CACHE_TTL = 5 * 60 * 1000
+const LEADERBOARD_CACHE_TTL = 30 * 1000
+const leaderboardCache = new Map()
+
+function setLeaderboardCache(key, data) {
+  if (leaderboardCache.size > 200) {
+    leaderboardCache.clear()
+  }
+
+  leaderboardCache.set(key, {
+    data,
+    updatedAt: Date.now()
+  })
+}
 
 const BASE_PRICE_PER_TOKEN = 0.002 / 1000
 export const EXCHANGE_RATE = 7.2
@@ -194,6 +207,53 @@ export function setupNewApiRoutes(app) {
     try {
       const { date, type = 'cost', limit = '20' } = req.query
       const limitNum = Math.min(parseInt(limit) || 20, 100)
+      const cacheKey = `${date || 'all'}|${type}|${limitNum}`
+      const cacheHit = leaderboardCache.get(cacheKey)
+
+      if (cacheHit && Date.now() - cacheHit.updatedAt < LEADERBOARD_CACHE_TTL) {
+        return res.json(cacheHit.data)
+      }
+
+      if (type === 'tokens' || type === 'requests') {
+        const params = []
+        let whereClause = "type = 2 AND token_name != ''"
+
+        if (date) {
+          const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
+          const dayEnd = dayStart + 86400
+          params.push(dayStart, dayEnd)
+          whereClause += ` AND created_at >= $1 AND created_at < $2`
+        }
+
+        const orderExpr = type === 'tokens' ? 'total_tokens' : 'total_requests'
+        const limitPlaceholder = `$${params.length + 1}`
+        params.push(limitNum)
+
+        const result = await pgPool.query(`
+          SELECT
+            token_name,
+            SUM(prompt_tokens + completion_tokens) as total_tokens,
+            COUNT(*) as total_requests
+          FROM logs
+          WHERE ${whereClause}
+          GROUP BY token_name
+          ORDER BY ${orderExpr} DESC
+          LIMIT ${limitPlaceholder}
+        `, params)
+
+        const rows = result.rows.map((row, idx) => ({
+          tokenName: row.token_name,
+          totalCost: 0,
+          totalCostCNY: 0,
+          totalTokens: Number(row.total_tokens),
+          totalRequests: Number(row.total_requests),
+          rank: idx + 1
+        }))
+
+        setLeaderboardCache(cacheKey, rows)
+
+        return res.json(rows)
+      }
 
       let query, params
       if (date) {
@@ -268,6 +328,8 @@ export function setupNewApiRoutes(app) {
         rank: idx + 1,
         totalCostCNY: item.totalCost * EXCHANGE_RATE
       }))
+
+      setLeaderboardCache(cacheKey, topN)
 
       res.json(topN)
     } catch (err) {

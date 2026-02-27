@@ -12,6 +12,7 @@ import { setupFeishuNotify } from './feishu-notify.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const PRICES_FILE = path.join(__dirname, 'model-prices.json')
+const LOG_FILE = path.join(__dirname, 'cron.log')
 
 const app = express()
 app.use(cors())
@@ -28,6 +29,36 @@ const pool = mysql.createPool({
 })
 
 let channelMap = {}
+let pricesCache = null
+let pricesWriteQueue = Promise.resolve()
+
+async function ensurePricesLoaded() {
+  if (pricesCache) return pricesCache
+
+  try {
+    const data = await fs.readFile(PRICES_FILE, 'utf8')
+    pricesCache = JSON.parse(data)
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      pricesCache = {}
+      await fs.writeFile(PRICES_FILE, JSON.stringify(pricesCache, null, 2), 'utf8')
+    } else {
+      throw err
+    }
+  }
+
+  return pricesCache
+}
+
+function queuePricesWrite(nextPrices) {
+  pricesCache = nextPrices
+
+  pricesWriteQueue = pricesWriteQueue
+    .catch(() => {})
+    .then(() => fs.writeFile(PRICES_FILE, JSON.stringify(pricesCache, null, 2), 'utf8'))
+
+  return pricesWriteQueue
+}
 
 async function loadChannels() {
   try {
@@ -48,6 +79,16 @@ async function testConnection() {
   } catch (err) {
     console.error('MySQL connection failed:', err.message)
     process.exit(1)
+  }
+}
+
+async function logToFile(message) {
+  const timestamp = new Date().toISOString()
+  const logLine = `[${timestamp}] ${message}\n`
+  try {
+    await fs.appendFile(LOG_FILE, logLine, 'utf8')
+  } catch (e) {
+    console.error('Failed to write log:', e.message)
   }
 }
 
@@ -184,16 +225,8 @@ app.get('/api/models', async (req, res) => {
       }
     }
     
-    // 从 prices.json 读取已配置的模型
-    let prices = {}
-    try {
-      const priceData = await fs.readFile(PRICES_FILE, 'utf8')
-      prices = JSON.parse(priceData)
-    } catch (e) {
-      // prices.json 可能不存在
-    }
+    const prices = await ensurePricesLoaded()
     
-    // 添加已配置但不在任何渠道中的模型
     for (const modelName of Object.keys(prices)) {
       if (!modelSet.has(modelName)) {
         modelSet.set(modelName, { channels: [], channelNames: ['自定义'] })
@@ -214,8 +247,8 @@ app.get('/api/models', async (req, res) => {
 
 app.get('/api/prices', async (req, res) => {
   try {
-    const data = await fs.readFile(PRICES_FILE, 'utf8')
-    res.json(JSON.parse(data))
+    const prices = await ensurePricesLoaded()
+    res.json(prices)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -225,13 +258,11 @@ app.put('/api/prices', async (req, res) => {
   try {
     const { modelName, input, output } = req.body
     if (!modelName) return res.status(400).json({ error: 'Missing modelName' })
-    
-    const data = await fs.readFile(PRICES_FILE, 'utf8')
-    const prices = JSON.parse(data)
-    
+
+    const prices = { ...(await ensurePricesLoaded()) }
     prices[modelName] = { input: Number(input), output: Number(output) }
-    
-    await fs.writeFile(PRICES_FILE, JSON.stringify(prices, null, 2), 'utf8')
+
+    await queuePricesWrite(prices)
     res.json({ success: true, prices })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -265,8 +296,7 @@ app.get('/api/prices/remote', async (req, res) => {
 app.post('/api/prices/sync', async (req, res) => {
   try {
     let remotePrices = req.body
-    const data = await fs.readFile(PRICES_FILE, 'utf8')
-    const localPrices = JSON.parse(data)
+    const localPrices = await ensurePricesLoaded()
     
     const conflicts = []
     const newModels = []
@@ -309,15 +339,14 @@ app.post('/api/prices/sync', async (req, res) => {
 
 app.post('/api/prices/bulk', async (req, res) => {
   try {
-    const updates = req.body // { 'model': { input, output }, ... }
-    const data = await fs.readFile(PRICES_FILE, 'utf8')
-    const prices = JSON.parse(data)
-    
+    const updates = req.body
+    const prices = { ...(await ensurePricesLoaded()) }
+
     for (const [model, price] of Object.entries(updates)) {
       prices[model] = { input: Number(price.input), output: Number(price.output) }
     }
-    
-    await fs.writeFile(PRICES_FILE, JSON.stringify(prices, null, 2), 'utf8')
+
+    await queuePricesWrite(prices)
     res.json({ success: true, prices })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -332,12 +361,21 @@ testConnection().then(() => {
   if (webhookUrl) {
     const { sendDailyReport } = setupFeishuNotify(newApiDeps)
 
-    cron.schedule('0 17 * * *', async () => {
-      console.log('Feishu cron triggered:', new Date().toISOString())
-      await sendDailyReport()
-    }, { timezone: 'Asia/Shanghai' })
-
-    console.log('Feishu cron job scheduled: 0 17 * * * (Asia/Shanghai)')
+    // 每日 17:00 (北京时间) = 09:00 UTC 推送日报
+    cron.schedule('0 9 * * *', async () => {
+      const now = new Date()
+      console.log('[CRON] Daily report triggered:', now.toISOString())
+      await logToFile(`Daily report triggered at ${now.toISOString()}`)
+      try {
+        const result = await sendDailyReport()
+        await logToFile(`Daily report sent: ${JSON.stringify(result)}`)
+      } catch (err) {
+        await logToFile(`Daily report failed: ${err.message}`)
+      }
+    })
+    
+    console.log('[CRON] Daily report scheduled: 09:00 UTC (17:00 Beijing)')
+    logToFile('Server started, daily report scheduled for 09:00 UTC')
 
     app.get('/api/newapi/test-notify', async (req, res) => {
       try {

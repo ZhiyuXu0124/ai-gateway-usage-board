@@ -1,9 +1,10 @@
-import React from 'react'
+import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import App from './App.jsx'
-import NewApiDashboard from './NewApiDashboard.jsx'
 import './index.css'
+
+const App = lazy(() => import('./App.jsx'))
+const NewApiDashboard = lazy(() => import('./NewApiDashboard.jsx'))
 
 function Layout() {
   return (
@@ -42,8 +43,22 @@ function Layout() {
 
         <Routes>
           <Route path="/" element={<Navigate to="/newapi" replace />} />
-          <Route path="/oneapi" element={<App />} />
-          <Route path="/newapi" element={<NewApiDashboard />} />
+          <Route
+            path="/oneapi"
+            element={
+              <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
+                <App />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/newapi"
+            element={
+              <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
+                <NewApiDashboard />
+              </Suspense>
+            }
+          />
         </Routes>
       </div>
     </BrowserRouter>

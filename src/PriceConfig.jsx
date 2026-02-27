@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getDisplayName, normalizeModelName } from './model-name-map'
+import { fetchJson } from './api-client'
 
 export default function PriceConfig({ prices, onUpdate }) {
   const [usedModels, setUsedModels] = useState([])
@@ -17,8 +18,7 @@ export default function PriceConfig({ prices, onUpdate }) {
   const loadUsedModels = async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/models')
-      const models = await res.json()
+      const models = await fetchJson('/api/models')
       
       // 构建显示名称映射
       const nameMap = {}
@@ -68,16 +68,12 @@ export default function PriceConfig({ prices, onUpdate }) {
   const handleSave = async (originalName, displayName, input, output) => {
     const saveName = getSaveName(originalName, displayName)
     try {
-      const res = await fetch('/api/prices', {
+      await fetchJson('/api/prices', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ modelName: saveName, input, output })
       })
-      if (res.ok) {
-        onUpdate()
-      } else {
-        alert('保存失败')
-      }
+      onUpdate()
     } catch (e) {
       alert('保存错误: ' + e.message)
     }
@@ -86,8 +82,7 @@ export default function PriceConfig({ prices, onUpdate }) {
   const handleSync = async () => {
     setSyncing(true)
     try {
-      const res = await fetch('/api/prices/remote')
-      const remotePrices = await res.json()
+      const remotePrices = await fetchJson('/api/prices/remote')
       
       if (remotePrices.error) {
         throw new Error(remotePrices.error)
@@ -163,17 +158,15 @@ export default function PriceConfig({ prices, onUpdate }) {
         updates[saveName] = { input: item.input, output: item.output }
       })
       
-      const res = await fetch('/api/prices/bulk', {
+      await fetchJson('/api/prices/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       })
-      
-      if (res.ok) {
-        setSyncResult(null)
-        onUpdate()
-        alert('同步完成')
-      }
+
+      setSyncResult(null)
+      onUpdate()
+      alert('同步完成')
     } catch (e) {
       alert('应用同步失败')
     }

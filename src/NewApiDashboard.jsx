@@ -15,6 +15,7 @@ import {
   Bar
 } from 'recharts';
 import dayjs from 'dayjs';
+import { fetchJson } from './api-client';
 
 const IconRefresh = ({ className }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -228,37 +229,54 @@ const TokenDetailView = ({ tokenName, onBack }) => {
 
   const enc = encodeURIComponent(tokenName);
 
-  const fetchGlobal = useCallback(async () => {
+  const fetchGlobal = useCallback(async (signal) => {
     setLoading(true);
     try {
       const [ovRes, trendRes] = await Promise.all([
-        fetch(`/api/newapi/user-overview?token_name=${enc}`).then(r => r.json()).catch(() => ({})),
-        fetch(`/api/newapi/user-trend?token_name=${enc}`).then(r => r.json()).catch(() => [])
+        fetchJson(`/api/newapi/user-overview?token_name=${enc}`, { signal }),
+        fetchJson(`/api/newapi/user-trend?token_name=${enc}`, { signal })
       ]);
+      if (signal?.aborted) return;
       setOverview(ovRes);
       setTrend(trendRes || []);
     } catch (err) {
-      console.error("Failed to fetch token data", err);
+      if (err.name !== 'AbortError') {
+        console.error('Failed to fetch token data', err);
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [tokenName]);
 
-  const fetchDaily = useCallback(async () => {
+  const fetchDaily = useCallback(async (signal) => {
     try {
       const [dailyRes, hourlyRes] = await Promise.all([
-        fetch(`/api/newapi/user-daily-overview?token_name=${enc}&date=${selectedDate}`).then(r => r.json()).catch(() => ({})),
-        fetch(`/api/newapi/user-hourly?token_name=${enc}&date=${selectedDate}`).then(r => r.json()).catch(() => ({ chartData: [], topModels: [] }))
+        fetchJson(`/api/newapi/user-daily-overview?token_name=${enc}&date=${selectedDate}`, { signal }),
+        fetchJson(`/api/newapi/user-hourly?token_name=${enc}&date=${selectedDate}`, { signal })
       ]);
+      if (signal?.aborted) return;
       setDailyOv(dailyRes);
       setHourlyData(hourlyRes);
     } catch (err) {
-      console.error("Failed to fetch daily data", err);
+      if (err.name !== 'AbortError') {
+        console.error('Failed to fetch daily data', err);
+      }
     }
   }, [tokenName, selectedDate]);
 
-  useEffect(() => { fetchGlobal(); }, [fetchGlobal]);
-  useEffect(() => { fetchDaily(); }, [fetchDaily]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchGlobal(controller.signal);
+    return () => controller.abort();
+  }, [fetchGlobal]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchDaily(controller.signal);
+    return () => controller.abort();
+  }, [fetchDaily]);
 
   const handlePrevDate = () => setSelectedDate(d => dayjs(d).subtract(1, 'day').format('YYYY-MM-DD'));
   const handleNextDate = () => {
@@ -499,25 +517,32 @@ const ModelAnalytics = () => {
   const [granularity, setGranularity] = useState('day');
   const [activeIdx, setActiveIdx] = useState(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (signal) => {
     setLoading(true);
     try {
-      const res = await fetch(
-        `/api/newapi/model-trend?start=${dateRange.start}&end=${dateRange.end}&granularity=${granularity}`
+      const data = await fetchJson(
+        `/api/newapi/model-trend?start=${dateRange.start}&end=${dateRange.end}&granularity=${granularity}`,
+        { signal }
       );
-      const data = await res.json();
+      if (signal?.aborted) return;
       setChartData(data.chartData || []);
       setPieData(data.pieData || []);
       setTopModels(data.topModels || []);
     } catch (err) {
-      console.error('Failed to fetch model trend:', err);
+      if (err.name !== 'AbortError') {
+        console.error('Failed to fetch model trend:', err);
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [dateRange, granularity]);
 
   useEffect(() => {
-    fetchData();
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
   }, [fetchData]);
 
   const handleStartChange = (e) => {
@@ -785,7 +810,7 @@ export default function NewApiDashboard() {
   const [selectedToken, setSelectedToken] = useState(null);
   const [hoveredProgressBar, setHoveredProgressBar] = useState(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (signal) => {
     setLoading(true);
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -798,13 +823,15 @@ export default function NewApiDashboard() {
         leaderboardRes,
         modelRes
       ] = await Promise.all([
-        fetch('/api/newapi/overview', { headers }).then(r => r.json()).catch(() => ({})),
-        fetch('/api/newapi/available-dates', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/newapi/trend?days=30', { headers }).then(r => r.json()).catch(() => []),
-        fetch(`/api/newapi/daily-overview?date=${selectedDate}`, { headers }).then(r => r.json()).catch(() => ({})),
-        fetch(`/api/newapi/leaderboard?type=${leaderboardType}&limit=20${leaderboardTab === 'daily' ? `&date=${selectedDate}` : ''}`, { headers }).then(r => r.json()).catch(() => []),
-        fetch(`/api/newapi/model-distribution${leaderboardTab === 'daily' ? `?date=${selectedDate}` : ''}`, { headers }).then(r => r.json()).catch(() => [])
+        fetchJson('/api/newapi/overview', { headers, signal }),
+        fetchJson('/api/newapi/available-dates', { headers, signal }),
+        fetchJson('/api/newapi/trend?days=30', { headers, signal }),
+        fetchJson(`/api/newapi/daily-overview?date=${selectedDate}`, { headers, signal }),
+        fetchJson(`/api/newapi/leaderboard?type=${leaderboardType}&limit=20${leaderboardTab === 'daily' ? `&date=${selectedDate}` : ''}`, { headers, signal }),
+        fetchJson(`/api/newapi/model-distribution${leaderboardTab === 'daily' ? `?date=${selectedDate}` : ''}`, { headers, signal })
       ]);
+
+      if (signal?.aborted) return;
 
       setOverview(overviewRes);
       setAvailableDates(datesRes || []);
@@ -815,17 +842,25 @@ export default function NewApiDashboard() {
       
       setLastUpdated(new Date());
     } catch (error) {
-      console.error("Failed to fetch dashboard data:", error);
+      if (error.name !== 'AbortError') {
+        console.error('Failed to fetch dashboard data:', error);
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [selectedDate, leaderboardTab, leaderboardType]);
 
   useEffect(() => {
     if (!selectedToken) {
-      fetchData();
+      const controller = new AbortController();
+      fetchData(controller.signal);
       const interval = setInterval(fetchData, 5 * 60 * 1000);
-      return () => clearInterval(interval);
+      return () => {
+        clearInterval(interval);
+        controller.abort();
+      };
     }
   }, [fetchData, selectedToken]);
 

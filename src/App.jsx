@@ -3,6 +3,7 @@ import dayjs from 'dayjs'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import PriceConfig from './PriceConfig'
 import { getDisplayName } from './model-name-map'
+import { fetchJson } from './api-client'
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#14b8a6']
 
@@ -110,22 +111,37 @@ export default function App() {
   const [showAllModels, setShowAllModels] = useState(false)
 
   // Fetch prices on mount
-  const fetchPrices = () => {
-    fetch('/api/prices')
-      .then(r => r.json())
-      .then(setModelPrices)
-      .catch(e => console.error('Failed to load prices', e))
+  const fetchPrices = async (signal) => {
+    try {
+      const prices = await fetchJson('/api/prices', { signal })
+      setModelPrices(prices || {})
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        console.error('Failed to load prices', e)
+      }
+    }
   }
 
   useEffect(() => {
-    fetchPrices()
-    fetch('/api/tokens')
-      .then(r => r.json())
-      .then(data => {
-        setTokens(data)
-        if (data.length > 0) setSelectedToken(data[0])
-      })
-      .catch(e => setError('Failed to load tokens: ' + e.message))
+    const controller = new AbortController()
+
+    const loadInitialData = async () => {
+      await fetchPrices(controller.signal)
+
+      try {
+        const data = await fetchJson('/api/tokens', { signal: controller.signal })
+        setTokens(data || [])
+        if (data && data.length > 0) setSelectedToken(data[0])
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          setError('Failed to load tokens: ' + e.message)
+        }
+      }
+    }
+
+    loadInitialData()
+
+    return () => controller.abort()
   }, [])
 
   // Helper functions using state
@@ -152,6 +168,7 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedToken) return
+    const controller = new AbortController()
     
     let start, end
     if (rangeKey === 'custom') {
@@ -173,15 +190,26 @@ export default function App() {
     })
 
     Promise.all([
-      fetch(`/api/stats?${params}`).then(r => r.json()),
-      fetch(`/api/trend?${params}`).then(r => r.json())
+      fetchJson(`/api/stats?${params}`, { signal: controller.signal }),
+      fetchJson(`/api/trend?${params}`, { signal: controller.signal })
     ])
       .then(([statsData, trendData]) => {
+        if (controller.signal.aborted) return
         setStats(statsData)
         setTrend(trendData)
       })
-      .catch(e => setError('Failed to load data: ' + e.message))
-      .finally(() => setLoading(false))
+      .catch(e => {
+        if (e.name !== 'AbortError') {
+          setError('Failed to load data: ' + e.message)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
+      })
+
+    return () => controller.abort()
   }, [selectedToken, rangeKey, customStart, customEnd])
 
   const allModels = useMemo(() => {

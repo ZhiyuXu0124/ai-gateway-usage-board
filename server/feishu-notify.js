@@ -22,7 +22,87 @@ function getTodayRange() {
   return { dateStr, dayStart, dayEnd }
 }
 
-function buildCard(dateStr, tokens, summary, threshold) {
+async function getUserActivity(pgPool, calculateCost, dayStart, dayEnd) {
+  // 获取今日活跃用户详情
+  const todayResult = await pgPool.query(`
+    SELECT 
+      token_name,
+      model_name,
+      SUM(prompt_tokens) as p_tokens,
+      SUM(completion_tokens) as c_tokens,
+      COUNT(*) as cnt
+    FROM logs
+    WHERE type = 2
+      AND created_at >= $1
+      AND created_at < $2
+      AND token_name != ''
+    GROUP BY token_name, model_name
+  `, [dayStart, dayEnd])
+
+  // 获取历史用户（今日之前有过记录的用户）
+  const historyResult = await pgPool.query(`
+    SELECT DISTINCT token_name
+    FROM logs
+    WHERE type = 2 
+      AND created_at < $1
+      AND token_name != ''
+  `, [dayStart])
+
+  const historySet = new Set(historyResult.rows.map(r => r.token_name))
+  
+  // 按 token_name 聚合今日数据
+  const userMap = {}
+  for (const r of todayResult.rows) {
+    const p = Number(r.p_tokens)
+    const c = Number(r.c_tokens)
+    const count = Number(r.cnt)
+    const costUSD = calculateCost(r.model_name, p, c, count)
+    const costCNY = costUSD * EXCHANGE_RATE
+
+    if (!userMap[r.token_name]) {
+      userMap[r.token_name] = {
+        tokenName: r.token_name,
+        totalCostCNY: 0,
+        totalTokens: 0,
+        totalRequests: 0,
+        models: new Set()
+      }
+    }
+
+    const u = userMap[r.token_name]
+    u.totalCostCNY += costCNY
+    u.totalTokens += (p + c)
+    u.totalRequests += count
+    u.models.add(r.model_name)
+  }
+
+  const allUsers = Object.values(userMap)
+  
+  // 区分新人和老用户
+  const newUsers = allUsers.filter(u => !historySet.has(u.tokenName))
+  const oldUsers = allUsers.filter(u => historySet.has(u.tokenName))
+  
+  // 按消耗排序
+  newUsers.sort((a, b) => b.totalCostCNY - a.totalCostCNY)
+  oldUsers.sort((a, b) => b.totalCostCNY - a.totalCostCNY)
+
+  return { newUsers, oldUsers, totalUsers: allUsers.length }
+}
+
+function formatUserList(users, isNew = false) {
+  if (users.length === 0) return ''
+  
+  const badge = isNew ? '🌟 **NEW** ' : '👤 '
+  const lines = users.map(u => {
+    const models = [...u.models].slice(0, 3).join(', ')
+    const moreModels = u.models.size > 3 ? ` (+${u.models.size - 3})` : ''
+    return `${badge}${u.tokenName} · ¥${u.totalCostCNY.toFixed(2)} · ${formatNumber(u.totalTokens)} tokens · ${models}${moreModels}`
+  })
+  
+  return lines.join('\n')
+}
+
+function buildCard(dateStr, tokens, summary, threshold, userActivity) {
   const header = {
     title: { tag: 'plain_text', content: `📊 API 消耗日报 — ${dateStr}` },
     template: 'blue'
@@ -35,6 +115,35 @@ function buildCard(dateStr, tokens, summary, threshold) {
     content: `**今日总览**\n👥 活跃令牌 **${summary.totalUsers}** 个 | 📡 调用 **${formatNumber(summary.totalRequests)}** 次 | 🔤 Tokens **${formatNumber(summary.totalTokens)}** | 💰 总消耗 **¥${summary.totalCostCNY.toFixed(2)}**`
   })
   elements.push({ tag: 'hr' })
+
+  // 用户活跃度板块
+  if (userActivity) {
+    const { newUsers, oldUsers, totalUsers } = userActivity
+    
+    if (newUsers.length > 0) {
+      elements.push({
+        tag: 'markdown',
+        content: `### 🎉 欢迎新人上线（${newUsers.length}人）`
+      })
+      elements.push({
+        tag: 'markdown',
+        content: formatUserList(newUsers, true)
+      })
+      elements.push({ tag: 'hr' })
+    }
+
+    if (oldUsers.length > 0) {
+      elements.push({
+        tag: 'markdown',
+        content: `### 👥 老用户活跃（${oldUsers.length}人）`
+      })
+      elements.push({
+        tag: 'markdown',
+        content: formatUserList(oldUsers, false)
+      })
+      elements.push({ tag: 'hr' })
+    }
+  }
 
   if (tokens.length > 0) {
     elements.push({
@@ -124,6 +233,9 @@ export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig 
     try {
       await refreshPricingConfig(pgPool)
 
+      // 获取用户活跃度数据
+      const userActivity = await getUserActivity(pgPool, calculateCost, dayStart, dayEnd)
+
       const result = await pgPool.query(`
         SELECT token_name, model_name,
           SUM(prompt_tokens) as p_tokens,
@@ -186,13 +298,13 @@ export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig 
         t.models.sort((a, b) => b.costCNY - a.costCNY)
       }
 
-      const payload = buildCard(dateStr, filtered, summary, threshold)
+      const payload = buildCard(dateStr, filtered, summary, threshold, userActivity)
 
       // Check payload size (20KB limit for custom bot)
       const payloadStr = JSON.stringify(payload)
       if (payloadStr.length > 19000) {
         const truncated = filtered.slice(0, Math.max(5, Math.floor(filtered.length / 2)))
-        const truncatedPayload = buildCard(dateStr, truncated, summary, threshold)
+        const truncatedPayload = buildCard(dateStr, truncated, summary, threshold, userActivity)
         console.log(`卡片过大 (${payloadStr.length} bytes)，截断到 ${truncated.length} 个令牌`)
         const sendResult = await postToFeishu(webhookUrl, truncatedPayload)
         return { ...sendResult, date: dateStr, tokensReported: truncated.length, truncated: true }
