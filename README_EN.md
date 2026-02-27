@@ -68,7 +68,7 @@ NEWAPI_DB_NAME=new_api
 
 # Feishu Notification (optional)
 FEISHU_WEBHOOK_URL=your_feishu_webhook
-FEISHU_ALERT_THRESHOLD=150
+FEISHU_ALERT_THRESHOLD=100
 
 # Server Port
 PORT=3001

@@ -213,7 +213,7 @@ async function postToFeishu(webhookUrl, payload) {
 
 export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig }) {
   const webhookUrl = process.env.FEISHU_WEBHOOK_URL
-  const threshold = Number(process.env.FEISHU_ALERT_THRESHOLD) || 150
+  const threshold = Number(process.env.FEISHU_ALERT_THRESHOLD) || 100
 
   async function sendDailyReport(overrideDate) {
     if (!webhookUrl) {
