@@ -92,6 +92,189 @@ async function logToFile(message) {
   }
 }
 
+async function resolvePersonalToken(tokenKey) {
+  const candidates = [tokenKey]
+  if (tokenKey.startsWith('sk-') && tokenKey.length > 3) {
+    candidates.push(tokenKey.slice(3))
+  }
+
+  let tokenRows = []
+  for (const candidate of candidates) {
+    const [rows] = await pool.query(
+      'SELECT id, name, status, user_id FROM tokens WHERE `key` = ? LIMIT 1',
+      [candidate]
+    )
+    if (rows.length > 0) {
+      tokenRows = rows
+      break
+    }
+  }
+
+  if (tokenRows.length === 0) {
+    return null
+  }
+
+  const token = tokenRows[0]
+  const [nameRows] = await pool.query(
+    `SELECT token_name FROM logs
+     WHERE type = 2 AND token_id = ? AND token_name != ''
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [token.id]
+  )
+
+  return {
+    tokenId: token.id,
+    displayName: nameRows[0]?.token_name || token.name || `Token #${token.id}`,
+    status: Number(token.status)
+  }
+}
+
+app.get('/api/personal/verify', async (req, res) => {
+  try {
+    const { token } = req.query
+    if (!token) {
+      return res.status(400).json({ error: 'Missing token' })
+    }
+
+    const tokenInfo = await resolvePersonalToken(token)
+    if (!tokenInfo) {
+      return res.json({ valid: false })
+    }
+
+    const [usageRows] = await pool.query(
+      'SELECT 1 FROM logs WHERE type = 2 AND token_id = ? LIMIT 1',
+      [tokenInfo.tokenId]
+    )
+
+    res.json({
+      valid: true,
+      hasUsage: usageRows.length > 0,
+      tokenId: tokenInfo.tokenId,
+      displayName: tokenInfo.displayName,
+      status: tokenInfo.status
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/personal/stats', async (req, res) => {
+  const { token, start, end } = req.query
+
+  if (!token || !start || !end) {
+    return res.status(400).json({ error: 'Missing required params: token, start, end' })
+  }
+
+  const startTs = Math.floor(new Date(start).getTime() / 1000)
+  const endTs = Math.floor(new Date(end).getTime() / 1000)
+
+  try {
+    const tokenInfo = await resolvePersonalToken(token)
+    if (!tokenInfo) {
+      return res.status(404).json({ error: 'Invalid token' })
+    }
+
+    const [rows] = await pool.query(`
+      SELECT 
+        model_name,
+        channel_id,
+        COUNT(*) as request_count,
+        SUM(prompt_tokens) as total_prompt_tokens,
+        SUM(completion_tokens) as total_completion_tokens
+      FROM logs
+      WHERE token_id = ?
+        AND type = 2
+        AND created_at >= ?
+        AND created_at <= ?
+      GROUP BY model_name, channel_id
+      ORDER BY (total_prompt_tokens + total_completion_tokens) DESC
+    `, [tokenInfo.tokenId, startTs, endTs])
+
+    const summary = {
+      totalRequests: 0,
+      totalTokens: 0,
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0
+    }
+
+    const models = rows.map(r => {
+      const promptTokens = Number(r.total_prompt_tokens)
+      const completionTokens = Number(r.total_completion_tokens)
+      const totalTokens = promptTokens + completionTokens
+
+      summary.totalRequests += Number(r.request_count)
+      summary.totalPromptTokens += promptTokens
+      summary.totalCompletionTokens += completionTokens
+      summary.totalTokens += totalTokens
+
+      return {
+        modelName: r.model_name,
+        channelId: r.channel_id,
+        channelName: channelMap[r.channel_id] || `Channel ${r.channel_id}`,
+        requestCount: Number(r.request_count),
+        promptTokens,
+        completionTokens,
+        totalTokens
+      }
+    })
+
+    res.json({
+      displayName: tokenInfo.displayName,
+      models,
+      summary
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/personal/trend', async (req, res) => {
+  const { token, start, end } = req.query
+
+  if (!token || !start || !end) {
+    return res.status(400).json({ error: 'Missing required params' })
+  }
+
+  const startTs = Math.floor(new Date(start).getTime() / 1000)
+  const endTs = Math.floor(new Date(end).getTime() / 1000)
+
+  try {
+    const tokenInfo = await resolvePersonalToken(token)
+    if (!tokenInfo) {
+      return res.status(404).json({ error: 'Invalid token' })
+    }
+
+    const [rows] = await pool.query(`
+      SELECT
+        DATE(FROM_UNIXTIME(created_at)) as date,
+        model_name,
+        COUNT(*) as request_count,
+        SUM(prompt_tokens + completion_tokens) as total_tokens
+      FROM logs
+      WHERE token_id = ?
+        AND type = 2
+        AND created_at >= ?
+        AND created_at <= ?
+      GROUP BY date, model_name
+      ORDER BY date
+    `, [tokenInfo.tokenId, startTs, endTs])
+
+    res.json(rows.map(r => {
+      const d = new Date(r.date)
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      return {
+        date: dateStr,
+        modelName: r.model_name,
+        requestCount: Number(r.request_count),
+        totalTokens: Number(r.total_tokens)
+      }
+    }))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.get('/api/tokens', async (req, res) => {
   try {
     const [rows] = await pool.query(

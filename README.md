@@ -22,6 +22,7 @@
 - **多维度分析**: 今日概览、30日趋势、模型分布、令牌排行榜
 - **飞书通知**: 每日定时推送用量日报，超额告警
 - **价格配置**: 支持从 models.dev 同步最新模型定价
+- **个人查询页**: 支持输入个人令牌（兼容 `sk-` 前缀）后查看个人用量详情
 - **响应式设计**: 双主题设计（OneAPI 清爽白 / NewAPI 赛博黑）
 
 ## 技术栈
@@ -82,6 +83,7 @@ npm run dev
 
 - 前端: http://localhost:5173
 - 后端 API: http://localhost:3001
+- 个人查询页: http://localhost:5173/personal
 
 ### 4. 生产构建
 
@@ -103,6 +105,7 @@ npm run server
 │   ├── main.jsx           # 路由配置
 │   ├── App.jsx            # OneAPI 看板（浅色主题）
 │   ├── NewApiDashboard.jsx # NewAPI 看板（深色主题）
+│   ├── PersonalTokenPage.jsx # 个人令牌查询与详情页（受限访问）
 │   └── PriceConfig.jsx    # 价格配置页面
 ├── README.md              # 中文文档
 ├── README_EN.md           # English Documentation
@@ -130,6 +133,22 @@ npm run server
 - 筛选当日消耗超过阈值的令牌
 - 包含：活跃令牌数、总调用次数、Token 总量、总费用
 - 支持手动测试：`GET /api/newapi/test-notify?date=2026-02-01`
+
+### 个人令牌查询页（新增）
+
+- 入口路由：`/personal`
+- 详情路由：`/personal/detail`
+- 访问限制：在 `/personal` 路径下会隐藏主导航，只允许「查看个人详情」或「返回 Token 输入页」
+- 令牌兼容规则：支持输入 `sk-xxxx` 或 `xxxx`；后端会自动处理前缀差异
+
+后端相关接口：
+
+- `GET /api/newapi/verify-token?token=...`：校验令牌是否存在，返回 `valid/hasUsage/tokenName/tokenId`
+- `GET /api/newapi/user-overview?token=...`：个人总览（费用、请求、Token）
+- `GET /api/newapi/user-daily-overview?token=...&date=YYYY-MM-DD`：个人当日明细
+- `GET /api/newapi/user-trend?token=...&days=30`：个人趋势
+
+> 说明：NewAPI 的 `tokens.key` 默认不带 `sk-` 前缀，本项目已做兼容映射。
 
 ## 局域网访问配置
 

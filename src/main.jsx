@@ -1,15 +1,19 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import './index.css'
 
 const App = lazy(() => import('./App.jsx'))
 const NewApiDashboard = lazy(() => import('./NewApiDashboard.jsx'))
+const PersonalTokenPage = lazy(() => import('./PersonalTokenPage.jsx'))
 
-function Layout() {
+function AppRoutes() {
+  const location = useLocation()
+  const hideMainNav = location.pathname.startsWith('/personal')
+
   return (
-    <BrowserRouter>
-      <div className="min-h-screen bg-gray-950">
+    <div className="min-h-screen bg-gray-950">
+      {!hideMainNav && (
         <nav className="bg-gray-900/80 backdrop-blur-xl border-b border-gray-800 sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-6">
             <div className="flex items-center h-14 gap-1">
@@ -40,27 +44,51 @@ function Layout() {
             </div>
           </div>
         </nav>
+      )}
 
-        <Routes>
-          <Route path="/" element={<Navigate to="/newapi" replace />} />
-          <Route
-            path="/oneapi"
-            element={
-              <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
-                <App />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/newapi"
-            element={
-              <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
-                <NewApiDashboard />
-              </Suspense>
-            }
-          />
-        </Routes>
-      </div>
+      <Routes>
+        <Route path="/" element={<Navigate to="/newapi" replace />} />
+        <Route
+          path="/oneapi"
+          element={
+            <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
+              <App />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/newapi"
+          element={
+            <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
+              <NewApiDashboard />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/personal"
+          element={
+            <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
+              <PersonalTokenPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/personal/detail"
+          element={
+            <Suspense fallback={<div className="p-6 text-gray-300">Loading...</div>}>
+              <PersonalTokenPage />
+            </Suspense>
+          }
+        />
+      </Routes>
+    </div>
+  )
+}
+
+function Layout() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
     </BrowserRouter>
   )
 }

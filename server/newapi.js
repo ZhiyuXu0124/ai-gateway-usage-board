@@ -106,6 +106,62 @@ export function setupNewApiRoutes(app) {
 
   app.use('/api/newapi', ensurePricing)
 
+  async function resolveUserFilter(query) {
+    const { token_name, token } = query
+
+    if (token_name) {
+      return {
+        whereExpr: 'token_name = $1',
+        params: [token_name],
+        displayName: token_name,
+        tokenId: null
+      }
+    }
+
+    if (!token) {
+      return null
+    }
+
+    const candidates = [token]
+    if (token.startsWith('sk-') && token.length > 3) {
+      candidates.push(token.slice(3))
+    }
+
+    let tokenRow = null
+    for (const candidate of candidates) {
+      const res = await pgPool.query(
+        'SELECT id, key FROM tokens WHERE "key" = $1 LIMIT 1',
+        [candidate]
+      )
+      if (res.rows.length > 0) {
+        tokenRow = res.rows[0]
+        break
+      }
+    }
+
+    if (!tokenRow) {
+      return null
+    }
+
+    const nameRes = await pgPool.query(
+      `SELECT token_name
+       FROM logs
+       WHERE type = 2 AND token_id = $1 AND token_name != ''
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [tokenRow.id]
+    )
+
+    const displayName = nameRes.rows[0]?.token_name || `token-${tokenRow.id}`
+
+    return {
+      whereExpr: 'token_id = $1',
+      params: [tokenRow.id],
+      displayName,
+      tokenId: tokenRow.id
+    }
+  }
+
   app.get('/api/newapi/overview', async (req, res) => {
     try {
       const result = await pgPool.query(`
@@ -483,16 +539,17 @@ export function setupNewApiRoutes(app) {
 
   app.get('/api/newapi/user-trend', async (req, res) => {
     try {
-      const { token_name, days } = req.query
-      if (!token_name) return res.status(400).json({ error: 'Missing token_name' })
+      const { days } = req.query
+      const userFilter = await resolveUserFilter(req.query)
+      if (!userFilter) return res.status(400).json({ error: 'Missing or invalid token/token_name' })
       
-      let whereClause = 'type = 2 AND token_name = $1'
-      const params = [token_name]
+      let whereClause = `type = 2 AND ${userFilter.whereExpr}`
+      const params = [...userFilter.params]
       
       if (days) {
         const daysNum = Math.min(parseInt(days) || 30, 365)
         const startTs = Math.floor(Date.now() / 1000) - daysNum * 86400
-        whereClause += ' AND created_at >= $2'
+        whereClause += ` AND created_at >= $${params.length + 1}`
         params.push(startTs)
       }
 
@@ -554,8 +611,8 @@ export function setupNewApiRoutes(app) {
 
   app.get('/api/newapi/user-overview', async (req, res) => {
     try {
-      const { token_name } = req.query
-      if (!token_name) return res.status(400).json({ error: 'Missing token_name' })
+      const userFilter = await resolveUserFilter(req.query)
+      if (!userFilter) return res.status(400).json({ error: 'Missing or invalid token/token_name' })
 
       const result = await pgPool.query(`
         SELECT 
@@ -564,9 +621,9 @@ export function setupNewApiRoutes(app) {
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
         FROM logs 
-        WHERE type = 2 AND token_name = $1
+        WHERE type = 2 AND ${userFilter.whereExpr}
         GROUP BY model_name
-      `, [token_name])
+      `, userFilter.params)
 
       let totalCostUSD = 0, totalTokens = 0, totalPromptTokens = 0, totalCompletionTokens = 0, totalRequests = 0
 
@@ -580,6 +637,7 @@ export function setupNewApiRoutes(app) {
       })
 
       res.json({
+        tokenName: userFilter.displayName,
         totalCost: totalCostUSD,
         totalCostCNY: totalCostUSD * EXCHANGE_RATE,
         totalTokens, totalPromptTokens, totalCompletionTokens, totalRequests
@@ -591,8 +649,9 @@ export function setupNewApiRoutes(app) {
 
   app.get('/api/newapi/user-daily-overview', async (req, res) => {
     try {
-      const { token_name, date } = req.query
-      if (!token_name || !date) return res.status(400).json({ error: 'Missing token_name or date' })
+      const { date } = req.query
+      const userFilter = await resolveUserFilter(req.query)
+      if (!userFilter || !date) return res.status(400).json({ error: 'Missing or invalid token/token_name/date' })
 
       const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
       const dayEnd = dayStart + 86400
@@ -604,9 +663,9 @@ export function setupNewApiRoutes(app) {
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
         FROM logs 
-        WHERE type = 2 AND token_name = $1 AND created_at >= $2 AND created_at < $3
+        WHERE type = 2 AND ${userFilter.whereExpr} AND created_at >= $2 AND created_at < $3
         GROUP BY model_name
-      `, [token_name, dayStart, dayEnd])
+      `, [userFilter.params[0], dayStart, dayEnd])
 
       let totalCostUSD = 0, totalTokens = 0, totalPromptTokens = 0, totalCompletionTokens = 0, totalRequests = 0
       const models = []
@@ -623,6 +682,7 @@ export function setupNewApiRoutes(app) {
       })
 
       res.json({
+        tokenName: userFilter.displayName,
         date, totalCost: totalCostUSD, totalCostCNY: totalCostUSD * EXCHANGE_RATE,
         totalTokens, totalPromptTokens, totalCompletionTokens, totalRequests,
         models: models.sort((a, b) => b.costCNY - a.costCNY)
@@ -634,8 +694,9 @@ export function setupNewApiRoutes(app) {
 
   app.get('/api/newapi/user-hourly', async (req, res) => {
     try {
-      const { token_name, date } = req.query
-      if (!token_name || !date) return res.status(400).json({ error: 'Missing token_name or date' })
+      const { date } = req.query
+      const userFilter = await resolveUserFilter(req.query)
+      if (!userFilter || !date) return res.status(400).json({ error: 'Missing or invalid token/token_name/date' })
 
       const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
       const dayEnd = dayStart + 86400
@@ -647,10 +708,10 @@ export function setupNewApiRoutes(app) {
           SUM(prompt_tokens + completion_tokens) as total_tokens,
           COUNT(*) as cnt
         FROM logs 
-        WHERE type = 2 AND token_name = $1 AND created_at >= $2 AND created_at < $3
+        WHERE type = 2 AND ${userFilter.whereExpr} AND created_at >= $2 AND created_at < $3
         GROUP BY hour, model_name
         ORDER BY hour
-      `, [token_name, dayStart, dayEnd])
+      `, [userFilter.params[0], dayStart, dayEnd])
 
       const hourMap = {}
       const modelSet = new Set()
@@ -687,6 +748,31 @@ export function setupNewApiRoutes(app) {
         ORDER BY token_name
       `)
       res.json(result.rows.map(r => r.token_name))
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/verify-token', async (req, res) => {
+    try {
+      const userFilter = await resolveUserFilter(req.query)
+      if (!userFilter) {
+        return res.status(400).json({ error: 'Missing or invalid token/token_name' })
+      }
+
+      const result = await pgPool.query(`
+        SELECT 1
+        FROM logs
+        WHERE type = 2 AND ${userFilter.whereExpr}
+        LIMIT 1
+      `, userFilter.params)
+
+      res.json({
+        valid: true,
+        hasUsage: result.rows.length > 0,
+        tokenName: userFilter.displayName,
+        tokenId: userFilter.tokenId
+      })
     } catch (err) {
       res.status(500).json({ error: err.message })
     }
