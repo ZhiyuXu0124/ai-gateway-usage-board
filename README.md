@@ -123,10 +123,18 @@ npm run server
 docker compose up -d --build
 ```
 
+- 镜像名：`ai-gateway-usage-board`
+- 容器名：`ai-gateway-usage-board`
+
 启动后访问：
 
 - 前端: http://localhost:5173
-- 后端 API: http://localhost:3001
+
+说明：
+
+- `3001` 在容器内部监听，但默认**不再暴露到宿主机**
+- 页面访问只需要 `5173`
+- 如果需要手动触发飞书推送，请使用容器内命令（见下方）
 
 停止服务：
 
@@ -183,8 +191,18 @@ docker compose down
 - 若飞书返回频控（如 `11232`），服务会按重试参数自动补发
 - 支持超预算人员提醒（有 `open_id` 映射时发送 `<at>`，否则退化为 `@名称` 文本）
 - 配置多维表格参数后，会同步写入「时间/人员/消耗金额/超额报备」记录
-- 支持手动测试：`GET /api/newapi/test-notify?date=2026-02-01`
 - 支持在线配置页：`/newapi/feishu-config`（读取/保存配置并可直接触发测试推送）
+- 手动触发当前 Docker 容器内的飞书推送：
+
+```bash
+docker exec ai-gateway-usage-board node -e "fetch('http://127.0.0.1:3001/api/newapi/test-notify').then(r=>r.text()).then(console.log)"
+```
+
+- 指定某一天手动触发：
+
+```bash
+docker exec ai-gateway-usage-board node -e "fetch('http://127.0.0.1:3001/api/newapi/test-notify?date=2026-02-01').then(r=>r.text()).then(console.log)"
+```
 
 ### 个人令牌查询页（新增）
 

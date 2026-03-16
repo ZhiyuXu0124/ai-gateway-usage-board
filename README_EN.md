@@ -121,10 +121,18 @@ This project can be packaged as a single image and started via Docker Compose (a
 docker compose up -d --build
 ```
 
+- Image name: `ai-gateway-usage-board`
+- Container name: `ai-gateway-usage-board`
+
 After startup:
 
 - Frontend: http://localhost:5173
-- Backend API: http://localhost:3001
+
+Notes:
+
+- Port `3001` still listens inside the container, but is **not exposed to the host by default**
+- Normal browser usage only needs `5173`
+- If you need to trigger Feishu manually, use the in-container command below
 
 Stop all services:
 
@@ -180,8 +188,18 @@ Cost = (promptTokens × ratio + completionTokens × ratio × completionRatio) ×
 - If Feishu rate-limits (e.g. `11232`), the service auto-retries with configured backoff
 - Supports over-budget reminder mentions (`<at>` when user-id mapping exists; fallback to text `@name`)
 - When Bitable config is provided, daily records are written to fields: time/person/cost/over-budget note
-- Manual test: \`GET /api/newapi/test-notify?date=2026-02-01\`
 - Online config page: `/newapi/feishu-config` (load/save config and trigger test push)
+- Manual trigger for the running Docker container:
+
+```bash
+docker exec ai-gateway-usage-board node -e "fetch('http://127.0.0.1:3001/api/newapi/test-notify').then(r=>r.text()).then(console.log)"
+```
+
+- Manual trigger for a specific date:
+
+```bash
+docker exec ai-gateway-usage-board node -e "fetch('http://127.0.0.1:3001/api/newapi/test-notify?date=2026-02-01').then(r=>r.text()).then(console.log)"
+```
 
 ## LAN Access Configuration
 
