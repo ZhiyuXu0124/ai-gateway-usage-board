@@ -70,6 +70,19 @@ NEWAPI_DB_NAME=new_api
 # 飞书通知 (可选)
 FEISHU_WEBHOOK_URL=your_feishu_webhook
 FEISHU_ALERT_THRESHOLD=100
+FEISHU_RETRY_MAX_ATTEMPTS=4
+FEISHU_RETRY_DELAY_MS=30000
+FEISHU_USER_MAPPING={"张三":"ou_xxx","李四":"ou_yyy"}
+
+# 飞书多维表格（可选，配置后每日自动写入超预算人员）
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=your_feishu_app_secret
+FEISHU_BITABLE_APP_TOKEN=app_xxx
+FEISHU_BITABLE_TABLE_ID=tbl_xxx
+FEISHU_BITABLE_DATE_FIELD=时间
+FEISHU_BITABLE_PERSON_FIELD=人员
+FEISHU_BITABLE_COST_FIELD=消耗金额
+FEISHU_BITABLE_REMARK_FIELD=超额报备
 
 # 服务端口
 PORT=3001
@@ -84,6 +97,16 @@ npm run dev
 - 前端: http://localhost:5173
 - 后端 API: http://localhost:3001
 - 个人查询页: http://localhost:5173/personal
+
+若 Docker 已占用默认端口，可使用本地开发新端口（且可关闭本地飞书推送防止重复通知）：
+
+```bash
+# 后端（禁用本地飞书）
+FEISHU_WEBHOOK_URL='' PORT=3002 npm run server
+
+# 前端（代理到 3002）
+VITE_API_PROXY_TARGET=http://localhost:3002 npm run client -- --port 5174 --host 0.0.0.0
+```
 
 ### 4. 生产构建
 
@@ -157,7 +180,11 @@ docker compose down
 - 每日 17:00 自动发送用量日报
 - 筛选当日消耗超过阈值的令牌
 - 包含：活跃令牌数、总调用次数、Token 总量、总费用
+- 若飞书返回频控（如 `11232`），服务会按重试参数自动补发
+- 支持超预算人员提醒（有 `open_id` 映射时发送 `<at>`，否则退化为 `@名称` 文本）
+- 配置多维表格参数后，会同步写入「时间/人员/消耗金额/超额报备」记录
 - 支持手动测试：`GET /api/newapi/test-notify?date=2026-02-01`
+- 支持在线配置页：`/newapi/feishu-config`（读取/保存配置并可直接触发测试推送）
 
 ### 个人令牌查询页（新增）
 
