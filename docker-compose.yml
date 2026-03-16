@@ -1,15 +1,17 @@
 services:
   app:
+    image: ai-gateway-usage-board
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: oneapi-dashboard-app
+    container_name: ai-gateway-usage-board
     restart: unless-stopped
     env_file:
       - .env
     environment:
       PORT: 3001
       FEISHU_ALERT_THRESHOLD: ${FEISHU_ALERT_THRESHOLD:-100}
+    expose:
+      - '3001'
     ports:
-      - '3001:3001'
       - '5173:5173'
