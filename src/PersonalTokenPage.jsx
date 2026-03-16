@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { fetchJson } from './api-client'
+import { TokenDetailView } from './NewApiDashboard.jsx'
 
 const PERSONAL_TOKEN_KEY = 'personal_query_token'
+const PERSONAL_TOKEN_META_KEY = 'personal_query_token_meta'
 
 function formatCost(val) {
   const num = Number(val || 0)
@@ -44,7 +46,7 @@ function TokenInputView({ onVerified }) {
         setError('Token 校验失败，请检查后重试')
         return
       }
-      onVerified(token)
+      onVerified(token, { tokenId: result.tokenId, tokenName: result.tokenName || token })
     } catch (err) {
       setError('校验失败: ' + err.message)
     } finally {
@@ -84,166 +86,40 @@ function TokenInputView({ onVerified }) {
   )
 }
 
-function PersonalDetailView({ tokenKey, onBack }) {
-  const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [overview, setOverview] = useState({ totalCostCNY: 0, totalTokens: 0, totalRequests: 0 })
-  const [daily, setDaily] = useState({ totalCostCNY: 0, totalTokens: 0, totalRequests: 0, models: [] })
-  const [trend, setTrend] = useState([])
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    const loadData = async () => {
-      setLoading(true)
-      setError('')
-      try {
-        const encodedToken = encodeURIComponent(tokenKey)
-
-        const [verify, allStats, dayStats, trendRows] = await Promise.all([
-          fetchJson(`/api/newapi/verify-token?token=${encodedToken}`, { signal: controller.signal }),
-          fetchJson(`/api/newapi/user-overview?token=${encodedToken}`, { signal: controller.signal }),
-          fetchJson(`/api/newapi/user-daily-overview?token=${encodedToken}&date=${selectedDate}`, { signal: controller.signal }),
-          fetchJson(`/api/newapi/user-trend?token=${encodedToken}&days=30`, { signal: controller.signal })
-        ])
-
-        if (controller.signal.aborted) return
-
-        if (!verify.valid) {
-          setError('Token 无效或不存在')
-          return
-        }
-
-        setDisplayName(verify.tokenName || allStats.tokenName || tokenKey)
-
-        setOverview({
-          totalCostCNY: allStats.totalCostCNY || 0,
-          totalTokens: allStats.totalTokens || 0,
-          totalRequests: allStats.totalRequests || 0
-        })
-
-        setDaily({
-          totalCostCNY: dayStats.totalCostCNY || 0,
-          totalTokens: dayStats.totalTokens || 0,
-          totalRequests: dayStats.totalRequests || 0,
-          models: (dayStats.models || []).sort((a, b) => b.costCNY - a.costCNY)
-        })
-
-        setTrend((trendRows || []).slice(-10).reverse())
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          setError('加载失败: ' + err.message)
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false)
-        }
-      }
-    }
-
-    loadData()
-    return () => controller.abort()
-  }, [tokenKey, selectedDate])
-
-  const titleDate = useMemo(() => {
-    return selectedDate === dayjs().format('YYYY-MM-DD') ? '今日' : selectedDate
-  }, [selectedDate])
-
-  return (
-    <div className="min-h-screen bg-gray-950 text-gray-200 px-6 py-8">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-white">个人详情</h1>
-            <p className="text-sm text-gray-400 mt-1">令牌标识: <span className="font-mono text-cyan-400">{displayName || tokenKey}</span></p>
-          </div>
-          <button onClick={onBack} className="rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800">
-            返回 Token 输入页
-          </button>
-        </div>
-
-        <div className="rounded-xl border border-cyan-500/20 bg-gray-900/60 p-4 flex items-center gap-3">
-          <label className="text-sm text-gray-400">选择日期</label>
-          <input
-            type="date"
-            value={selectedDate}
-            max={dayjs().format('YYYY-MM-DD')}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="rounded border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm"
-          />
-          <span className="text-xs text-gray-500">当前查看: {titleDate}</span>
-        </div>
-
-        {error && <div className="text-sm text-red-400">{error}</div>}
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-xl border border-emerald-500/20 bg-gray-900/60 p-5">
-            <p className="text-xs text-gray-400">累计消耗</p>
-            <p className="text-xl font-bold text-emerald-400 mt-2">{formatCost(overview.totalCostCNY)}</p>
-          </div>
-          <div className="rounded-xl border border-purple-500/20 bg-gray-900/60 p-5">
-            <p className="text-xs text-gray-400">累计 Tokens</p>
-            <p className="text-xl font-bold text-purple-400 mt-2">{formatTokens(overview.totalTokens)}</p>
-          </div>
-          <div className="rounded-xl border border-cyan-500/20 bg-gray-900/60 p-5">
-            <p className="text-xs text-gray-400">累计调用次数</p>
-            <p className="text-xl font-bold text-cyan-400 mt-2">{formatNumber(overview.totalRequests)}</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-cyan-500/20 bg-gray-900/60 p-5">
-            <h2 className="text-sm font-semibold text-white mb-3">{titleDate} 模型明细</h2>
-            {loading ? (
-              <p className="text-sm text-gray-400">加载中...</p>
-            ) : daily.models && daily.models.length > 0 ? (
-              <div className="space-y-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
-                {daily.models.map((m, idx) => (
-                  <div key={idx} className="rounded-md border border-gray-800 bg-gray-900/40 px-3 py-2 flex items-center justify-between">
-                    <div className="min-w-0">
-                      <p className="text-sm text-gray-200 font-mono truncate" title={m.modelName}>{m.modelName}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">Tokens: {formatTokens(m.tokens)} · 请求: {formatNumber(m.requests)}</p>
-                    </div>
-                    <p className="text-sm text-cyan-300 font-mono ml-3">{formatCost(m.costCNY)}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500">该日期暂无记录</p>
-            )}
-          </div>
-
-          <div className="rounded-xl border border-cyan-500/20 bg-gray-900/60 p-5">
-            <h2 className="text-sm font-semibold text-white mb-3">近 10 天趋势</h2>
-            {trend.length > 0 ? (
-              <div className="space-y-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
-                {trend.map((d, idx) => (
-                  <div key={idx} className="rounded-md border border-gray-800 bg-gray-900/40 px-3 py-2 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-300">{d.date}</p>
-                      <p className="text-xs text-gray-500">Tokens: {formatTokens(d.totalTokens)} · 请求: {formatNumber(d.totalRequests)}</p>
-                    </div>
-                    <p className="text-sm text-emerald-300 font-mono">{formatCost(d.totalCostCNY)}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500">暂无趋势数据</p>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function PersonalTokenPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const isDetailRoute = location.pathname === '/personal/detail'
   const [verifiedToken, setVerifiedToken] = useState(() => sessionStorage.getItem(PERSONAL_TOKEN_KEY) || '')
+  const [tokenMeta, setTokenMeta] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(PERSONAL_TOKEN_META_KEY)
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
+  })
+
+  useEffect(() => {
+    if (!isDetailRoute || !verifiedToken || tokenMeta?.tokenId) {
+      return
+    }
+
+    let cancelled = false
+
+    fetchJson(`/api/newapi/verify-token?token=${encodeURIComponent(verifiedToken)}`)
+      .then((result) => {
+        if (cancelled || !result.valid) return
+        const nextMeta = { tokenId: result.tokenId, tokenName: result.tokenName || verifiedToken }
+        setTokenMeta(nextMeta)
+        sessionStorage.setItem(PERSONAL_TOKEN_META_KEY, JSON.stringify(nextMeta))
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [isDetailRoute, tokenMeta?.tokenId, verifiedToken])
 
   useEffect(() => {
     if (isDetailRoute && !verifiedToken) {
@@ -251,15 +127,19 @@ export default function PersonalTokenPage() {
     }
   }, [isDetailRoute, verifiedToken, navigate])
 
-  const handleVerified = (token) => {
+  const handleVerified = (token, meta) => {
     sessionStorage.setItem(PERSONAL_TOKEN_KEY, token)
+    sessionStorage.setItem(PERSONAL_TOKEN_META_KEY, JSON.stringify(meta))
     setVerifiedToken(token)
+    setTokenMeta(meta)
     navigate('/personal/detail', { replace: true })
   }
 
   const handleBack = () => {
     sessionStorage.removeItem(PERSONAL_TOKEN_KEY)
+    sessionStorage.removeItem(PERSONAL_TOKEN_META_KEY)
     setVerifiedToken('')
+    setTokenMeta(null)
     navigate('/personal', { replace: true })
   }
 
@@ -267,5 +147,17 @@ export default function PersonalTokenPage() {
     return <TokenInputView onVerified={handleVerified} />
   }
 
-  return <PersonalDetailView tokenKey={verifiedToken} onBack={handleBack} />
+  if (!tokenMeta?.tokenId) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-300 font-sans selection:bg-cyan-500/30 pb-12 pt-20 px-6 max-w-7xl mx-auto flex items-center justify-center">
+        <p className="text-sm text-gray-400">正在加载令牌详情...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-300 font-sans selection:bg-cyan-500/30 pb-12 pt-20 px-6 max-w-7xl mx-auto">
+      <TokenDetailView tokenId={tokenMeta.tokenId} tokenName={tokenMeta.tokenName || verifiedToken} onBack={handleBack} />
+    </div>
+  )
 }

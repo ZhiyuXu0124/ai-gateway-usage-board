@@ -104,12 +104,59 @@ export function setupNewApiRoutes(app) {
     next()
   }
 
+  const getTokenDisplayExpr = (logAlias = 'l', tokenAlias = 't') =>
+    `COALESCE(NULLIF(MAX(${tokenAlias}.name), ''), NULLIF(MAX(${logAlias}.token_name), ''), 'Token #' || ${logAlias}.token_id::text)`
+
   app.use('/api/newapi', ensurePricing)
 
   async function resolveUserFilter(query) {
-    const { token_name, token } = query
+    const { token_id, token_name, token } = query
+
+    if (token_id) {
+      const res = await pgPool.query(
+        'SELECT id, name FROM tokens WHERE id = $1 LIMIT 1',
+        [Number(token_id)]
+      )
+
+      if (res.rows.length === 0) {
+        return null
+      }
+
+      const tokenRow = res.rows[0]
+      const nameRes = await pgPool.query(
+        `SELECT token_name
+         FROM logs
+         WHERE type = 2 AND token_id = $1 AND token_name != ''
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [tokenRow.id]
+      )
+
+      const displayName = tokenRow.name || nameRes.rows[0]?.token_name || `token-${tokenRow.id}`
+
+      return {
+        whereExpr: 'token_id = $1',
+        params: [tokenRow.id],
+        displayName,
+        tokenId: tokenRow.id
+      }
+    }
 
     if (token_name) {
+      const tokenRes = await pgPool.query(
+        'SELECT id, name FROM tokens WHERE name = $1 LIMIT 1',
+        [token_name]
+      )
+
+      if (tokenRes.rows.length > 0) {
+        return {
+          whereExpr: 'token_id = $1',
+          params: [tokenRes.rows[0].id],
+          displayName: tokenRes.rows[0].name || token_name,
+          tokenId: tokenRes.rows[0].id
+        }
+      }
+
       return {
         whereExpr: 'token_name = $1',
         params: [token_name],
@@ -160,6 +207,73 @@ export function setupNewApiRoutes(app) {
       displayName,
       tokenId: tokenRow.id
     }
+  }
+
+  async function queryUserModelDistribution(userFilter, startTs, endTs) {
+    const params = [...userFilter.params]
+    let whereExpr = `type = 2 AND ${userFilter.whereExpr}`
+
+    if (startTs !== null && startTs !== undefined) {
+      params.push(startTs)
+      whereExpr += ` AND created_at >= $${params.length}`
+    }
+
+    if (endTs !== null && endTs !== undefined) {
+      params.push(endTs)
+      whereExpr += ` AND created_at < $${params.length}`
+    }
+
+    const result = await pgPool.query(
+      `SELECT
+        model_name,
+        SUM(prompt_tokens) as p_tokens,
+        SUM(completion_tokens) as c_tokens,
+        COUNT(*) as cnt
+      FROM logs
+      WHERE ${whereExpr}
+      GROUP BY model_name`,
+      params
+    )
+
+    const models = result.rows.map((r) => {
+      const promptTokens = Number(r.p_tokens)
+      const completionTokens = Number(r.c_tokens)
+      const totalTokens = promptTokens + completionTokens
+      const requests = Number(r.cnt)
+      const totalCostUSD = calculateCost(r.model_name, promptTokens, completionTokens, requests)
+
+      return {
+        modelName: r.model_name,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        requests,
+        totalCost: totalCostUSD,
+        totalCostCNY: totalCostUSD * EXCHANGE_RATE
+      }
+    })
+
+    const summary = models.reduce(
+      (acc, m) => {
+        acc.totalTokens += m.totalTokens
+        acc.totalRequests += m.requests
+        acc.totalCost += m.totalCost
+        acc.totalCostCNY += m.totalCostCNY
+        return acc
+      },
+      { totalTokens: 0, totalRequests: 0, totalCost: 0, totalCostCNY: 0 }
+    )
+
+    const withRatio = models
+      .map((m) => ({
+        ...m,
+        requestRatio: summary.totalRequests > 0 ? (m.requests / summary.totalRequests) * 100 : 0,
+        tokenRatio: summary.totalTokens > 0 ? (m.totalTokens / summary.totalTokens) * 100 : 0,
+        costRatio: summary.totalCostCNY > 0 ? (m.totalCostCNY / summary.totalCostCNY) * 100 : 0
+      }))
+      .sort((a, b) => b.totalCostCNY - a.totalCostCNY)
+
+    return { summary, models: withRatio }
   }
 
   app.get('/api/newapi/overview', async (req, res) => {
@@ -272,13 +386,13 @@ export function setupNewApiRoutes(app) {
 
       if (type === 'tokens' || type === 'requests') {
         const params = []
-        let whereClause = "type = 2 AND token_name != ''"
+        let whereClause = 'l.type = 2 AND l.token_id IS NOT NULL'
 
         if (date) {
           const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
           const dayEnd = dayStart + 86400
           params.push(dayStart, dayEnd)
-          whereClause += ` AND created_at >= $1 AND created_at < $2`
+          whereClause += ' AND l.created_at >= $1 AND l.created_at < $2'
         }
 
         const orderExpr = type === 'tokens' ? 'total_tokens' : 'total_requests'
@@ -287,17 +401,20 @@ export function setupNewApiRoutes(app) {
 
         const result = await pgPool.query(`
           SELECT
-            token_name,
-            SUM(prompt_tokens + completion_tokens) as total_tokens,
+            l.token_id,
+            ${getTokenDisplayExpr()} as token_name,
+            SUM(l.prompt_tokens + l.completion_tokens) as total_tokens,
             COUNT(*) as total_requests
-          FROM logs
+          FROM logs l
+          LEFT JOIN tokens t ON t.id = l.token_id
           WHERE ${whereClause}
-          GROUP BY token_name
+          GROUP BY l.token_id
           ORDER BY ${orderExpr} DESC
           LIMIT ${limitPlaceholder}
         `, params)
 
         const rows = result.rows.map((row, idx) => ({
+          tokenId: Number(row.token_id),
           tokenName: row.token_name,
           totalCost: 0,
           totalCostCNY: 0,
@@ -317,30 +434,34 @@ export function setupNewApiRoutes(app) {
         const dayEnd = dayStart + 86400
         query = `
           SELECT 
-            token_name,
-            model_name,
-            SUM(prompt_tokens) as p_tokens,
-            SUM(completion_tokens) as c_tokens,
+            l.token_id,
+            ${getTokenDisplayExpr()} as token_name,
+            l.model_name,
+            SUM(l.prompt_tokens) as p_tokens,
+            SUM(l.completion_tokens) as c_tokens,
             COUNT(*) as cnt
-          FROM logs 
-          WHERE type = 2 
-            AND token_name != '' 
-            AND created_at >= $1 
-            AND created_at < $2
-          GROUP BY token_name, model_name
+          FROM logs l
+          LEFT JOIN tokens t ON t.id = l.token_id
+          WHERE l.type = 2 
+            AND l.token_id IS NOT NULL
+            AND l.created_at >= $1 
+            AND l.created_at < $2
+          GROUP BY l.token_id, l.model_name
         `
         params = [dayStart, dayEnd]
       } else {
         query = `
           SELECT 
-            token_name,
-            model_name,
-            SUM(prompt_tokens) as p_tokens,
-            SUM(completion_tokens) as c_tokens,
+            l.token_id,
+            ${getTokenDisplayExpr()} as token_name,
+            l.model_name,
+            SUM(l.prompt_tokens) as p_tokens,
+            SUM(l.completion_tokens) as c_tokens,
             COUNT(*) as cnt
-          FROM logs 
-          WHERE type = 2 AND token_name != ''
-          GROUP BY token_name, model_name
+          FROM logs l
+          LEFT JOIN tokens t ON t.id = l.token_id
+          WHERE l.type = 2 AND l.token_id IS NOT NULL
+          GROUP BY l.token_id, l.model_name
         `
         params = []
       }
@@ -350,8 +471,10 @@ export function setupNewApiRoutes(app) {
       const userMap = {}
       
       result.rows.forEach(r => {
-        if (!userMap[r.token_name]) {
-          userMap[r.token_name] = {
+        const tokenId = Number(r.token_id)
+        if (!userMap[tokenId]) {
+          userMap[tokenId] = {
+            tokenId,
             tokenName: r.token_name,
             totalCost: 0,
             totalTokens: 0,
@@ -364,9 +487,9 @@ export function setupNewApiRoutes(app) {
         const count = Number(r.cnt)
         const cost = calculateCost(r.model_name, p, c, count)
         
-        userMap[r.token_name].totalCost += cost
-        userMap[r.token_name].totalTokens += (p + c)
-        userMap[r.token_name].totalRequests += count
+        userMap[tokenId].totalCost += cost
+        userMap[tokenId].totalTokens += (p + c)
+        userMap[tokenId].totalRequests += count
       })
 
       let sorted = Object.values(userMap)
@@ -539,7 +662,7 @@ export function setupNewApiRoutes(app) {
 
   app.get('/api/newapi/user-trend', async (req, res) => {
     try {
-      const { days } = req.query
+      const { days, endDate } = req.query
       const userFilter = await resolveUserFilter(req.query)
       if (!userFilter) return res.status(400).json({ error: 'Missing or invalid token/token_name' })
       
@@ -548,9 +671,14 @@ export function setupNewApiRoutes(app) {
       
       if (days) {
         const daysNum = Math.min(parseInt(days) || 30, 365)
-        const startTs = Math.floor(Date.now() / 1000) - daysNum * 86400
+        const endTs = endDate
+          ? Math.floor(new Date(endDate + 'T23:59:59+08:00').getTime() / 1000) + 1
+          : Math.floor(Date.now() / 1000) + 1
+        const startTs = endTs - daysNum * 86400
         whereClause += ` AND created_at >= $${params.length + 1}`
         params.push(startTs)
+        whereClause += ` AND created_at < $${params.length + 1}`
+        params.push(endTs)
       }
 
       const result = await pgPool.query(`
@@ -739,12 +867,65 @@ export function setupNewApiRoutes(app) {
     }
   })
 
+  app.get('/api/newapi/user-model-distribution', async (req, res) => {
+    try {
+      const userFilter = await resolveUserFilter(req.query)
+      if (!userFilter) {
+        return res.status(400).json({ error: 'Missing or invalid token/token_name' })
+      }
+
+      const { start, end } = req.query
+      let startTs = null
+      let endTs = null
+
+      if (start) {
+        startTs = Math.floor(new Date(start + 'T00:00:00+08:00').getTime() / 1000)
+      }
+
+      if (end) {
+        endTs = Math.floor(new Date(end + 'T23:59:59+08:00').getTime() / 1000) + 1
+      }
+
+      if (!startTs && !endTs) {
+        endTs = Math.floor(Date.now() / 1000) + 1
+        startTs = endTs - 7 * 86400
+      }
+
+      if (startTs && endTs && startTs >= endTs) {
+        return res.status(400).json({ error: 'Invalid time range: start must be before end' })
+      }
+
+      if (startTs && endTs) {
+        const windowSeconds = endTs - startTs
+        if (windowSeconds > 31 * 86400) {
+          return res.status(400).json({ error: 'Time range too large: max 31 days' })
+        }
+      }
+
+      const data = await queryUserModelDistribution(userFilter, startTs, endTs)
+
+      res.json({
+        tokenName: userFilter.displayName,
+        start: start || null,
+        end: end || null,
+        summary: data.summary,
+        models: data.models
+      })
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
   app.get('/api/newapi/tokens', async (req, res) => {
     try {
       const result = await pgPool.query(`
-        SELECT DISTINCT token_name 
-        FROM logs 
-        WHERE type = 2 AND token_name != '' 
+        SELECT
+          l.token_id,
+          ${getTokenDisplayExpr()} as token_name
+        FROM logs l
+        LEFT JOIN tokens t ON t.id = l.token_id
+        WHERE l.type = 2 AND l.token_id IS NOT NULL
+        GROUP BY l.token_id
         ORDER BY token_name
       `)
       res.json(result.rows.map(r => r.token_name))
@@ -862,18 +1043,28 @@ export function setupNewApiRoutes(app) {
         return row
       })
 
+      const modelStatsMap = new Map()
+      result.rows.forEach((r) => {
+        const promptTokens = Number(r.p_tokens)
+        const completionTokens = Number(r.c_tokens)
+        const requests = Number(r.cnt)
+        const totalTokens = promptTokens + completionTokens
+        const prev = modelStatsMap.get(r.model_name) || {
+          name: r.model_name,
+          value: 0,
+          tokens: 0,
+          costCNY: 0
+        }
+
+        const costUSD = calculateCost(r.model_name, promptTokens, completionTokens, requests)
+        prev.value += requests
+        prev.tokens += totalTokens
+        prev.costCNY += costUSD * EXCHANGE_RATE
+        modelStatsMap.set(r.model_name, prev)
+      })
+
       // Pie chart data (total by model)
-      const pieData = [...modelSet]
-        .map(name => {
-          const totalTokens = result.rows
-            .filter(r => r.model_name === name)
-            .reduce((sum, r) => sum + Number(r.p_tokens) + Number(r.c_tokens), 0)
-          const totalRequests = result.rows
-            .filter(r => r.model_name === name)
-            .reduce((sum, r) => sum + Number(r.cnt), 0)
-          return { name, value: totalRequests, tokens: totalTokens }
-        })
-        .sort((a, b) => b.value - a.value)
+      const pieData = [...modelStatsMap.values()].sort((a, b) => b.value - a.value)
 
       res.json({
         chartData,
