@@ -126,6 +126,8 @@ const formatNumber = (num) => {
   return new Intl.NumberFormat('en-US').format(num);
 };
 
+const PIE_COLORS = ['#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#14b8a6', '#f43f5e'];
+
 const StatCard = ({ title, value, subValue, icon: Icon, colorClass = "text-cyan-400" }) => (
   <div className="group relative overflow-hidden rounded-xl bg-gray-900/60 backdrop-blur-xl border border-cyan-500/20 p-6 transition-all duration-300 hover:border-cyan-500/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.2)]">
     <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
@@ -219,22 +221,72 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null;
 };
 
-const TokenDetailView = ({ tokenName, onBack }) => {
+const SHARED_DASHBOARD_STYLES = `
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(34, 211, 238, 0.82) rgba(8, 47, 73, 0.22);
+    scrollbar-gutter: stable;
+  }
+  .scroll-surface {
+    background-clip: padding-box;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: linear-gradient(180deg, rgba(8, 47, 73, 0.35), rgba(30, 41, 59, 0.2));
+    border-radius: 9999px;
+    box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.06);
+    margin-block: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(34, 211, 238, 0.75), rgba(139, 92, 246, 0.72));
+    border-radius: 9999px;
+    border: 1px solid rgba(15, 23, 42, 0.7);
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.18);
+    transition: background 0.25s ease, box-shadow 0.25s ease;
+    background-clip: padding-box;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(34, 211, 238, 0.95), rgba(168, 85, 247, 0.9));
+    box-shadow: 0 0 14px rgba(139, 92, 246, 0.28);
+  }
+  .custom-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fadeIn {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+`;
+
+const SharedDashboardStyles = () => <style>{SHARED_DASHBOARD_STYLES}</style>;
+
+export const TokenDetailView = ({ tokenId, tokenName, onBack }) => {
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState({ totalCostCNY: 0, totalTokens: 0, totalRequests: 0, totalPromptTokens: 0, totalCompletionTokens: 0 });
   const [trend, setTrend] = useState([]);
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [rangeStart, setRangeStart] = useState(dayjs().subtract(6, 'day').format('YYYY-MM-DD'));
+  const [rangeEnd, setRangeEnd] = useState(dayjs().format('YYYY-MM-DD'));
   const [dailyOv, setDailyOv] = useState({ totalCostCNY: 0, totalTokens: 0, totalRequests: 0, totalPromptTokens: 0, totalCompletionTokens: 0, models: [] });
   const [hourlyData, setHourlyData] = useState({ chartData: [], topModels: [] });
+  const [modelMetricsLoading, setModelMetricsLoading] = useState(false);
+  const [modelMetrics, setModelMetrics] = useState({ summary: { totalCostCNY: 0, totalTokens: 0, totalRequests: 0 }, models: [] });
+  const [activeIdx, setActiveIdx] = useState(null);
+  const [lockedIdx, setLockedIdx] = useState(null);
 
-  const enc = encodeURIComponent(tokenName);
+  const query = tokenId ? `token_id=${encodeURIComponent(tokenId)}` : `token_name=${encodeURIComponent(tokenName)}`;
 
   const fetchGlobal = useCallback(async (signal) => {
     setLoading(true);
     try {
       const [ovRes, trendRes] = await Promise.all([
-        fetchJson(`/api/newapi/user-overview?token_name=${enc}`, { signal }),
-        fetchJson(`/api/newapi/user-trend?token_name=${enc}`, { signal })
+        fetchJson(`/api/newapi/user-overview?${query}`, { signal }),
+        fetchJson(`/api/newapi/user-trend?${query}`, { signal })
       ]);
       if (signal?.aborted) return;
       setOverview(ovRes);
@@ -248,13 +300,13 @@ const TokenDetailView = ({ tokenName, onBack }) => {
         setLoading(false);
       }
     }
-  }, [tokenName]);
+  }, [query]);
 
   const fetchDaily = useCallback(async (signal) => {
     try {
       const [dailyRes, hourlyRes] = await Promise.all([
-        fetchJson(`/api/newapi/user-daily-overview?token_name=${enc}&date=${selectedDate}`, { signal }),
-        fetchJson(`/api/newapi/user-hourly?token_name=${enc}&date=${selectedDate}`, { signal })
+        fetchJson(`/api/newapi/user-daily-overview?${query}&date=${selectedDate}`, { signal }),
+        fetchJson(`/api/newapi/user-hourly?${query}&date=${selectedDate}`, { signal })
       ]);
       if (signal?.aborted) return;
       setDailyOv(dailyRes);
@@ -264,7 +316,7 @@ const TokenDetailView = ({ tokenName, onBack }) => {
         console.error('Failed to fetch daily data', err);
       }
     }
-  }, [tokenName, selectedDate]);
+  }, [query, selectedDate]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -278,6 +330,44 @@ const TokenDetailView = ({ tokenName, onBack }) => {
     return () => controller.abort();
   }, [fetchDaily]);
 
+  useEffect(() => {
+    setRangeEnd(selectedDate);
+    setRangeStart(dayjs(selectedDate).subtract(6, 'day').format('YYYY-MM-DD'));
+  }, [selectedDate]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadModelMetrics = async () => {
+      const diffDays = dayjs(rangeEnd).diff(dayjs(rangeStart), 'day') + 1;
+      if (diffDays > 31) {
+        setModelMetrics({ summary: { totalCostCNY: 0, totalTokens: 0, totalRequests: 0 }, models: [] });
+        return;
+      }
+
+      setModelMetricsLoading(true);
+      try {
+        const response = await fetchJson(`/api/newapi/user-model-distribution?${query}&start=${rangeStart}&end=${rangeEnd}`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setModelMetrics({
+          summary: response.summary || { totalCostCNY: 0, totalTokens: 0, totalRequests: 0 },
+          models: response.models || []
+        });
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Failed to fetch token model distribution', err);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setModelMetricsLoading(false);
+        }
+      }
+    };
+
+    loadModelMetrics();
+    return () => controller.abort();
+  }, [query, rangeStart, rangeEnd]);
+
   const handlePrevDate = () => setSelectedDate(d => dayjs(d).subtract(1, 'day').format('YYYY-MM-DD'));
   const handleNextDate = () => {
     setSelectedDate(d => {
@@ -287,6 +377,7 @@ const TokenDetailView = ({ tokenName, onBack }) => {
   };
 
   const dateLabel = selectedDate === dayjs().format('YYYY-MM-DD') ? '今日' : selectedDate;
+  const rangeLabel = `${rangeStart} 至 ${rangeEnd}`;
 
   const chartData = useMemo(() => {
     if (!trend) return [];
@@ -299,23 +390,34 @@ const TokenDetailView = ({ tokenName, onBack }) => {
     trend.forEach(day => {
       if (day.models) {
         day.models.forEach(m => {
-          if (!models[m.modelName]) models[m.modelName] = 0;
-          models[m.modelName] += m.costCNY;
+          if (!models[m.modelName]) {
+            models[m.modelName] = { name: m.modelName, value: 0, tokens: 0, requests: 0, costCNY: 0 };
+          }
+          models[m.modelName].value += m.requests || 0;
+          models[m.modelName].tokens += m.tokens || 0;
+          models[m.modelName].requests += m.requests || 0;
+          models[m.modelName].costCNY += m.costCNY || 0;
         });
       }
     });
-    return Object.entries(models)
-      .map(([name, val]) => ({ name, value: val }))
+    return Object.values(models)
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
   }, [trend]);
 
-  const COLORS = ['#06b6d4', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
+  const COLORS = PIE_COLORS;
+  const totalPieRequests = useMemo(() => modelAgg.reduce((sum, item) => sum + Number(item.value || 0), 0), [modelAgg]);
+  const previewIdx = lockedIdx !== null ? lockedIdx : activeIdx;
+  const previewModel = previewIdx !== null ? modelAgg[previewIdx] : null;
+  const previewReqPercent = previewModel && totalPieRequests > 0
+    ? (Number(previewModel.value) / totalPieRequests) * 100
+    : 0;
 
   if (loading && !overview.totalRequests) return <div className="flex justify-center py-20"><IconRefresh className="animate-spin w-8 h-8 text-cyan-500" /></div>;
 
   return (
     <div className="flex flex-col gap-6 animate-fadeIn">
+      <SharedDashboardStyles />
       <div className="flex items-center gap-4">
         <button onClick={onBack} className="p-2 hover:bg-gray-800 rounded-lg transition-colors group">
           <IconArrowLeft className="w-5 h-5 text-gray-400 group-hover:text-white" />
@@ -352,42 +454,103 @@ const TokenDetailView = ({ tokenName, onBack }) => {
         </div>
 
         <div className="xl:col-span-1 bg-gray-900/60 backdrop-blur-xl border border-cyan-500/20 rounded-xl p-6 shadow-[0_0_15px_rgba(0,0,0,0.3)]">
-          <h3 className="text-lg font-bold text-white mb-4">模型消耗占比 (全量)</h3>
-          <div className="flex flex-col gap-3">
-            <div className="h-[180px] relative">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={modelAgg} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={3} dataKey="value">
-                    {modelAgg.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(val) => formatCost(val)} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-center">
-                  <span className="text-lg font-bold text-white">{modelAgg.length}</span>
-                  <p className="text-[10px] text-cyan-500 font-mono tracking-widest uppercase">Models</p>
+          <div className="h-[400px] flex flex-col">
+            <h3 className="text-sm font-bold text-gray-400 mb-4 uppercase tracking-wider">模型调用结构（次数 / Tokens / 金额）</h3>
+            <div className="flex-1 flex gap-3 min-h-0">
+              <div className="w-1/2 relative rounded-xl border border-cyan-500/20 bg-gradient-to-br from-cyan-900/20 via-gray-900/40 to-purple-900/20">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={modelAgg}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={44}
+                      outerRadius={78}
+                      paddingAngle={2}
+                      dataKey="value"
+                      onMouseEnter={(_, idx) => {
+                        if (lockedIdx === null) setActiveIdx(idx);
+                      }}
+                      onMouseLeave={() => {
+                        if (lockedIdx === null) setActiveIdx(null);
+                      }}
+                    >
+                      {modelAgg.map((entry, idx) => (
+                        <Cell
+                          key={`cell-${idx}`}
+                          fill={COLORS[idx % COLORS.length]}
+                          stroke={previewIdx === idx ? '#e5e7eb' : '#111827'}
+                          strokeWidth={previewIdx === idx ? 2 : 1}
+                          opacity={previewIdx !== null && previewIdx !== idx ? 0.35 : 1}
+                        />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="text-center rounded-full px-3 py-2 bg-gray-900/70 border border-gray-700">
+                    <p className="text-xl font-bold text-white font-mono">{modelAgg.length}</p>
+                    <p className="text-[10px] text-cyan-400 uppercase tracking-widest">Models</p>
+                  </div>
                 </div>
-              </div>
-            </div>
-            <div className="overflow-y-auto custom-scrollbar pr-1 space-y-1 max-h-[120px]">
-              {modelAgg.map((entry, idx) => {
-                const total = modelAgg.reduce((s, e) => s + e.value, 0);
-                return (
-                  <div key={idx} className="flex justify-between items-center text-xs p-1.5 rounded hover:bg-gray-800/50">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                      <span className="text-gray-300 truncate font-mono" title={entry.name}>{entry.name}</span>
-                    </div>
-                    <div className="flex items-center gap-3 flex-shrink-0">
-                      <span className="text-gray-400 font-mono">{formatCost(entry.value)}</span>
-                      <span className="text-gray-500 font-mono w-12 text-right">{total > 0 ? (entry.value / total * 100).toFixed(1) : 0}%</span>
+                {previewModel && (
+                  <div className="absolute left-3 bottom-3 z-40 pointer-events-none rounded-xl border border-cyan-500/40 bg-gray-900/95 backdrop-blur-xl px-3 py-2 shadow-2xl min-w-[160px]">
+                    <p className="text-cyan-300 font-mono text-sm font-bold truncate" title={previewModel.name}>{previewModel.name}</p>
+                    <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs font-mono">
+                      <span className="text-gray-400">调用次数</span>
+                      <span className="text-white text-right">{formatNumber(previewModel.requests)}</span>
+                      <span className="text-gray-400">Tokens</span>
+                      <span className="text-purple-300 text-right">{formatTokens(previewModel.tokens)}</span>
+                      <span className="text-gray-400">金额</span>
+                      <span className="text-emerald-300 text-right">{formatCost(previewModel.costCNY || 0)}</span>
+                      <span className="text-gray-500">调用占比</span>
+                      <span className="text-cyan-300 text-right">{previewReqPercent.toFixed(1)}%</span>
                     </div>
                   </div>
-                );
-              })}
+                )}
+              </div>
+              <div className="w-1/2 overflow-y-auto custom-scrollbar scroll-surface pr-1.5 pl-1 py-1 space-y-1.5 rounded-xl border border-gray-800/80 bg-gray-950/45">
+                {modelAgg.map((entry, idx) => {
+                  const reqPercent = totalPieRequests > 0 ? (Number(entry.value) / totalPieRequests) * 100 : 0;
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg border px-2.5 py-2 transition-all ${
+                        previewIdx === idx ? 'bg-gray-700/70 border-cyan-500/40' : 'bg-gray-900/40 border-gray-800 hover:border-gray-700'
+                      }`}
+                      onMouseEnter={() => {
+                        if (lockedIdx === null) setActiveIdx(idx);
+                      }}
+                      onMouseLeave={() => {
+                        if (lockedIdx === null) setActiveIdx(null);
+                      }}
+                      onClick={() => {
+                        setLockedIdx((prev) => (prev === idx ? null : idx));
+                        setActiveIdx(idx);
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+                          <span className="text-gray-200 truncate font-mono" title={entry.name}>{entry.name}</span>
+                        </div>
+                        <span className="text-cyan-300 font-mono">{reqPercent.toFixed(1)}%</span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-3 text-[11px] font-mono flex-wrap">
+                        <span className="text-gray-400 whitespace-nowrap">次 {formatNumber(entry.requests)}</span>
+                        <span className="text-purple-300 whitespace-nowrap">T {formatTokens(entry.tokens)}</span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-mono">
+                        <span className="text-gray-500">金额</span>
+                        <span className="text-emerald-300 whitespace-nowrap">¥ {Number(entry.costCNY || 0).toFixed(2)}</span>
+                      </div>
+                      {lockedIdx === idx && (
+                        <p className="mt-1 text-[10px] text-cyan-300 font-mono">已锁定，点击再次取消</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -487,7 +650,7 @@ const TokenDetailView = ({ tokenName, onBack }) => {
             {dailyOv.models && dailyOv.models.length > 0 && (
               <div className="mt-1">
                 <p className="text-xs text-gray-500 uppercase mb-2">模型明细</p>
-                <div className="space-y-1.5 max-h-[140px] overflow-y-auto custom-scrollbar pr-1">
+                <div className="space-y-1.5 max-h-[140px] overflow-y-auto custom-scrollbar scroll-surface pr-1.5 pl-1 py-1 rounded-lg border border-gray-800/70 bg-gray-950/35">
                   {dailyOv.models.map((m, i) => (
                     <div key={i} className="flex justify-between items-center text-xs">
                       <span className="text-gray-300 font-mono truncate max-w-[140px]" title={m.modelName}>{m.modelName}</span>
@@ -499,6 +662,65 @@ const TokenDetailView = ({ tokenName, onBack }) => {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-violet-500/20 bg-gray-900/60 p-6 shadow-[0_0_15px_rgba(0,0,0,0.3)]">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between mb-3 gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-white">模型分布聚合（区间）</h3>
+            <p className="text-xs text-violet-300 mt-1">{rangeLabel}</p>
+          </div>
+          <div className="flex flex-col items-stretch gap-3 lg:items-end">
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-violet-500/20 bg-gray-950/40 px-3 py-2">
+              <label className="text-sm text-gray-400">统计区间</label>
+              <input
+                type="date"
+                value={rangeStart}
+                max={rangeEnd}
+                onChange={(e) => setRangeStart(e.target.value)}
+                className="rounded border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm"
+              />
+              <span className="text-xs text-gray-500">至</span>
+              <input
+                type="date"
+                value={rangeEnd}
+                min={rangeStart}
+                max={dayjs().format('YYYY-MM-DD')}
+                onChange={(e) => setRangeEnd(e.target.value)}
+                className="rounded border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm"
+              />
+            </div>
+            <div className="text-xs text-gray-400 font-mono text-right">
+              <div>请求 {formatNumber(modelMetrics.summary.totalRequests)}</div>
+              <div>Tokens {formatTokens(modelMetrics.summary.totalTokens)} · {formatCost(modelMetrics.summary.totalCostCNY)}</div>
+            </div>
+          </div>
+        </div>
+
+        {modelMetricsLoading ? (
+          <p className="text-sm text-gray-400">加载中...</p>
+        ) : modelMetrics.models.length > 0 ? (
+          <div className="space-y-2 max-h-[340px] overflow-y-auto custom-scrollbar scroll-surface pr-2 pl-1 py-1 rounded-xl border border-gray-800/80 bg-gray-950/40">
+            {modelMetrics.models.map((m, idx) => (
+              <div key={idx} className="rounded-lg border border-gray-800 bg-gray-900/40 px-4 py-3 hover:border-violet-500/30 transition-all duration-300 hover:shadow-[0_0_18px_rgba(139,92,246,0.12)]">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-gray-200 font-mono truncate" title={m.modelName}>{m.modelName}</p>
+                  <p className="text-sm text-cyan-300 font-mono flex-shrink-0">{formatCost(m.totalCostCNY)}</p>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-400 font-mono">
+                  <span>请求: {formatNumber(m.requests)}</span>
+                  <span>Tokens: {formatTokens(m.totalTokens)}</span>
+                  <span>金额占比: {Number(m.costRatio || 0).toFixed(1)}%</span>
+                </div>
+                <div className="mt-2 h-1.5 w-full rounded-full bg-gray-800 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-cyan-500 via-violet-500 to-fuchsia-500 transition-all duration-500" style={{ width: `${Math.max(2, Math.min(100, Number(m.tokenRatio || 0)))}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">该区间暂无模型聚合数据</p>
+        )}
       </div>
     </div>
   );
@@ -516,6 +738,7 @@ const ModelAnalytics = () => {
   });
   const [granularity, setGranularity] = useState('day');
   const [activeIdx, setActiveIdx] = useState(null);
+  const [lockedIdx, setLockedIdx] = useState(null);
 
   const fetchData = useCallback(async (signal) => {
     setLoading(true);
@@ -559,7 +782,7 @@ const ModelAnalytics = () => {
     }
   };
 
-  const COLORS = ['#06b6d4', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
+  const COLORS = PIE_COLORS;
 
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -570,10 +793,10 @@ const ModelAnalytics = () => {
         <div className="bg-gray-900/95 backdrop-blur-xl border border-cyan-500/30 p-4 rounded-lg shadow-2xl max-w-xs">
           <p className="text-cyan-400 font-mono text-sm font-bold mb-2 border-b border-gray-700 pb-2">{label}</p>
           {filtered.map((entry, idx) => (
-            <div key={idx} className="flex items-center justify-between text-xs py-1 gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
-                <span className="text-gray-300 font-mono">{entry.name}</span>
+            <div key={idx} className="flex items-start justify-between text-xs py-1 gap-4">
+              <div className="flex items-start gap-2 min-w-0">
+                <div className="w-2 h-2 rounded-full flex-shrink-0 mt-1" style={{ backgroundColor: entry.color }} />
+                <span className="text-gray-300 font-mono truncate max-w-[150px]" title={entry.name}>{entry.name}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-white font-mono">{formatTokens(entry.value)}</span>
@@ -592,6 +815,13 @@ const ModelAnalytics = () => {
     }
     return null;
   };
+
+  const totalPieRequests = useMemo(() => pieData.reduce((sum, item) => sum + Number(item.value || 0), 0), [pieData]);
+  const previewIdx = lockedIdx !== null ? lockedIdx : activeIdx;
+  const previewModel = previewIdx !== null ? pieData[previewIdx] : null;
+  const previewReqPercent = previewModel && totalPieRequests > 0
+    ? (Number(previewModel.value) / totalPieRequests) * 100
+    : 0;
 
   if (loading && chartData.length === 0) {
     return (
@@ -700,91 +930,106 @@ const ModelAnalytics = () => {
         </div>
 
         <div className="h-[400px] flex flex-col">
-          <h3 className="text-sm font-bold text-gray-400 mb-4 uppercase tracking-wider">调用次数占比</h3>
-          <div className="flex-1 flex gap-2 min-h-0">
-            <div className="w-1/2 relative">
+          <h3 className="text-sm font-bold text-gray-400 mb-4 uppercase tracking-wider">模型调用结构（次数 / Tokens / 金额）</h3>
+          <div className="flex-1 flex gap-3 min-h-0">
+            <div className="w-1/2 relative rounded-xl border border-cyan-500/20 bg-gradient-to-br from-cyan-900/20 via-gray-900/40 to-purple-900/20">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={pieData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={40}
-                    outerRadius={65}
-                    paddingAngle={3}
+                    innerRadius={44}
+                    outerRadius={78}
+                    paddingAngle={2}
                     dataKey="value"
-                    onMouseEnter={(_, idx) => setActiveIdx(idx)}
-                    onMouseLeave={() => setActiveIdx(null)}
+                    onMouseEnter={(_, idx) => {
+                      if (lockedIdx === null) {
+                        setActiveIdx(idx);
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      if (lockedIdx === null) {
+                        setActiveIdx(null);
+                      }
+                    }}
                   >
                     {pieData.map((entry, idx) => (
-                      <Cell 
+                      <Cell
                         key={`cell-${idx}`}
                         fill={COLORS[idx % COLORS.length]}
-                        stroke={activeIdx === idx ? '#fff' : 'none'}
-                        strokeWidth={2}
-                        opacity={activeIdx !== null && activeIdx !== idx ? 0.4 : 1}
+                        stroke={activeIdx === idx ? '#e5e7eb' : '#111827'}
+                        strokeWidth={activeIdx === idx ? 2 : 1}
+                        opacity={previewIdx !== null && previewIdx !== idx ? 0.35 : 1}
                       />
                     ))}
                   </Pie>
-                  <Tooltip 
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const data = payload[0];
-                        const total = pieData.reduce((sum, item) => sum + item.value, 0);
-                        return (
-                          <div className="bg-gray-900/95 backdrop-blur-xl border border-cyan-500/30 p-3 rounded-lg shadow-2xl">
-                            <p className="text-cyan-400 font-mono text-sm font-bold mb-2">{data.name}</p>
-                            <div className="space-y-1 text-xs">
-                              <div className="flex justify-between gap-4">
-                                <span className="text-gray-400">调用次数:</span>
-                                <span className="text-white font-mono">{formatNumber(data.value)}</span>
-                              </div>
-                              <div className="flex justify-between gap-4">
-                                <span className="text-gray-400">Tokens:</span>
-                                <span className="text-purple-400 font-mono">{formatTokens(data.payload.tokens)}</span>
-                              </div>
-                              <div className="flex justify-between gap-4 pt-1 border-t border-gray-700">
-                                <span className="text-gray-400">占比:</span>
-                                <span className="text-emerald-400 font-mono">{total > 0 ? (data.value / total * 100).toFixed(2) : 0}%</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-center">
-                  <span className="text-lg font-bold text-white tracking-tight drop-shadow-lg">
-                    {pieData.length}
-                  </span>
-                  <p className="text-[10px] text-cyan-500 font-mono tracking-widest uppercase">Models</p>
+                <div className="text-center rounded-full px-3 py-2 bg-gray-900/70 border border-gray-700">
+                  <p className="text-xl font-bold text-white font-mono">{pieData.length}</p>
+                  <p className="text-[10px] text-cyan-400 uppercase tracking-widest">Models</p>
                 </div>
               </div>
-            </div>
-            <div className="w-1/2 overflow-y-auto custom-scrollbar pr-1 space-y-1">
-              {pieData.map((entry, idx) => (
-                <div 
-                  key={idx}
-                  className={`flex justify-between items-center text-xs p-1.5 rounded transition-all ${
-                    activeIdx === idx ? 'bg-gray-700/80 border border-cyan-500/30' : 'hover:bg-gray-800/50'
-                  }`}
-                  onMouseEnter={() => setActiveIdx(idx)}
-                  onMouseLeave={() => setActiveIdx(null)}
-                >
-                  <div className="flex items-center gap-2 overflow-hidden">
-                    <div 
-                      className="w-2 h-2 rounded-full flex-shrink-0" 
-                      style={{ backgroundColor: COLORS[idx % COLORS.length] }} 
-                    />
-                    <span className="text-gray-300 truncate font-mono" title={entry.name}>{entry.name}</span>
+              {previewModel && (
+                <div className="absolute left-3 bottom-3 z-40 pointer-events-none rounded-xl border border-cyan-500/40 bg-gray-900/95 backdrop-blur-xl px-3 py-2 shadow-2xl min-w-[160px]">
+                  <p className="text-cyan-300 font-mono text-sm font-bold truncate" title={previewModel.name}>{previewModel.name}</p>
+                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs font-mono">
+                    <span className="text-gray-400">调用次数</span>
+                    <span className="text-white text-right">{formatNumber(previewModel.value)}</span>
+                    <span className="text-gray-400">Tokens</span>
+                    <span className="text-purple-300 text-right">{formatTokens(previewModel.tokens)}</span>
+                    <span className="text-gray-400">金额</span>
+                    <span className="text-emerald-300 text-right">{formatCost(previewModel.costCNY || 0)}</span>
+                    <span className="text-gray-500">调用占比</span>
+                    <span className="text-cyan-300 text-right">{previewReqPercent.toFixed(1)}%</span>
                   </div>
-                  <span className="text-gray-400 font-mono flex-shrink-0">{formatNumber(entry.value)}</span>
                 </div>
-              ))}
+              )}
+            </div>
+            <div className="w-1/2 overflow-y-auto custom-scrollbar scroll-surface pr-1.5 pl-1 py-1 space-y-1.5 rounded-xl border border-gray-800/80 bg-gray-950/45">
+              {pieData.slice(0, 12).map((entry, idx) => {
+                const reqPercent = totalPieRequests > 0 ? (Number(entry.value) / totalPieRequests) * 100 : 0;
+                return (
+                  <div
+                    key={idx}
+                    className={`rounded-lg border px-2.5 py-2 transition-all ${
+                      previewIdx === idx ? 'bg-gray-700/70 border-cyan-500/40' : 'bg-gray-900/40 border-gray-800 hover:border-gray-700'
+                    }`}
+                    onMouseEnter={() => {
+                      if (lockedIdx === null) {
+                        setActiveIdx(idx);
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      if (lockedIdx === null) {
+                        setActiveIdx(null);
+                      }
+                    }}
+                    onClick={() => {
+                      setLockedIdx((prev) => (prev === idx ? null : idx));
+                      setActiveIdx(idx);
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+                        <span className="text-gray-200 truncate font-mono" title={entry.name}>{entry.name}</span>
+                      </div>
+                      <span className="text-cyan-300 font-mono">{reqPercent.toFixed(1)}%</span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-3 gap-1 text-[11px] font-mono">
+                      <span className="text-gray-400">次 {formatNumber(entry.value)}</span>
+                      <span className="text-purple-300">T {formatTokens(entry.tokens)}</span>
+                      <span className="text-emerald-300">¥ {Number(entry.costCNY || 0).toFixed(2)}</span>
+                    </div>
+                    {lockedIdx === idx && (
+                      <p className="mt-1 text-[10px] text-cyan-300 font-mono">已锁定，点击再次取消</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -901,7 +1146,7 @@ export default function NewApiDashboard() {
       name: item.modelName,
       value: item.totalCostCNY || 0,
       percentage: item.percentage,
-      color: ['#06b6d4', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'][index % 7]
+      color: PIE_COLORS[index % PIE_COLORS.length]
     }));
   }, [modelDist]);
 
@@ -938,7 +1183,7 @@ export default function NewApiDashboard() {
   if (selectedToken) {
     return (
       <div className="min-h-screen bg-gray-950 text-gray-300 font-sans selection:bg-cyan-500/30 pb-12 pt-20 px-6 max-w-7xl mx-auto">
-        <TokenDetailView tokenName={selectedToken} onBack={() => setSelectedToken(null)} />
+        <TokenDetailView tokenId={selectedToken.tokenId} tokenName={selectedToken.tokenName} onBack={() => setSelectedToken(null)} />
       </div>
     );
   }
@@ -960,6 +1205,23 @@ export default function NewApiDashboard() {
           </div>
 
           <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-gray-800/80 rounded-lg px-3 py-1.5 border border-gray-700">
+              <button
+                onClick={handlePrevDate}
+                className="p-1 hover:text-cyan-400 transition-colors disabled:opacity-30"
+                disabled={availableDates.length > 0 && selectedDate === availableDates[availableDates.length - 1]}
+              >
+                <IconChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="font-mono text-sm font-medium text-white min-w-[120px] text-center">{dateLabel}</span>
+              <button
+                onClick={handleNextDate}
+                className="p-1 hover:text-cyan-400 transition-colors disabled:opacity-30"
+                disabled={selectedDate === dayjs().format('YYYY-MM-DD')}
+              >
+                <IconChevronRight className="w-4 h-4" />
+              </button>
+            </div>
             <span className="text-xs font-mono text-gray-500 hidden sm:inline-block">
               UPDATED: {lastUpdated ? dayjs(lastUpdated).format('HH:mm:ss') : '--:--:--'}
             </span>
@@ -1007,32 +1269,6 @@ export default function NewApiDashboard() {
           />
         </div>
 
-        <div className="flex items-center justify-between bg-gray-900/60 backdrop-blur-xl border border-cyan-500/20 rounded-xl px-5 py-3 shadow-[0_0_15px_rgba(0,0,0,0.3)]">
-          <div className="flex items-center gap-2">
-            <IconCalendar className="w-4 h-4 text-cyan-500" />
-            <span className="text-sm font-medium text-gray-400">数据日期</span>
-          </div>
-          <div className="flex items-center gap-2 bg-gray-800/80 rounded-lg px-3 py-1.5 border border-gray-700">
-            <button 
-              onClick={handlePrevDate}
-              className="p-1 hover:text-cyan-400 transition-colors disabled:opacity-30"
-              disabled={availableDates.length > 0 && selectedDate === availableDates[availableDates.length - 1]}
-            >
-              <IconChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="font-mono text-sm font-medium text-white min-w-[120px] text-center">
-              {dateLabel}
-            </span>
-            <button 
-              onClick={handleNextDate}
-              className="p-1 hover:text-cyan-400 transition-colors disabled:opacity-30"
-              disabled={selectedDate === dayjs().format('YYYY-MM-DD')}
-            >
-              <IconChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 h-[600px]">
           
           <div className="xl:col-span-2 bg-gray-900/60 backdrop-blur-xl border border-cyan-500/20 rounded-xl overflow-hidden flex flex-col shadow-[0_0_15px_rgba(0,0,0,0.3)]">
@@ -1076,7 +1312,7 @@ export default function NewApiDashboard() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+            <div className="flex-1 overflow-y-auto custom-scrollbar scroll-surface p-2 rounded-xl border border-gray-800/80 bg-gray-950/35">
               {leaderboard.length > 0 ? (
                 leaderboard.map((item, index) => {
                   let val;
@@ -1091,7 +1327,7 @@ export default function NewApiDashboard() {
                       value={val}
                       maxValue={maxLeaderboardValue}
                       type={leaderboardType}
-                      onClick={() => setSelectedToken(item.tokenName)}
+                      onClick={() => setSelectedToken({ tokenId: item.tokenId, tokenName: item.tokenName })}
                     />
                   );
                 })
@@ -1264,28 +1500,7 @@ export default function NewApiDashboard() {
         </div>
       </main>
       
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 6px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: rgba(17, 24, 39, 0.5);
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(6, 182, 212, 0.3);
-          border-radius: 3px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(6, 182, 212, 0.5);
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fadeIn {
-          animation: fadeIn 0.5s ease-out forwards;
-        }
-      `}</style>
+      <SharedDashboardStyles />
     </div>
   );
 }

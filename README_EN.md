@@ -69,6 +69,19 @@ NEWAPI_DB_NAME=new_api
 # Feishu Notification (optional)
 FEISHU_WEBHOOK_URL=your_feishu_webhook
 FEISHU_ALERT_THRESHOLD=100
+FEISHU_RETRY_MAX_ATTEMPTS=4
+FEISHU_RETRY_DELAY_MS=30000
+FEISHU_USER_MAPPING={"Alice":"ou_xxx","Bob":"ou_yyy"}
+
+# Feishu Bitable (optional, daily sync for over-budget users)
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=your_feishu_app_secret
+FEISHU_BITABLE_APP_TOKEN=app_xxx
+FEISHU_BITABLE_TABLE_ID=tbl_xxx
+FEISHU_BITABLE_DATE_FIELD=Time
+FEISHU_BITABLE_PERSON_FIELD=Person
+FEISHU_BITABLE_COST_FIELD=Cost
+FEISHU_BITABLE_REMARK_FIELD=OverBudgetNote
 
 # Server Port
 PORT=3001
@@ -82,6 +95,16 @@ npm run dev
 
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:3001
+
+If Docker is already using default ports, run local development on alternate ports (and disable local Feishu push to avoid duplicate notifications):
+
+```bash
+# Backend (disable local Feishu)
+FEISHU_WEBHOOK_URL='' PORT=3002 npm run server
+
+# Frontend (proxy to 3002)
+VITE_API_PROXY_TARGET=http://localhost:3002 npm run client -- --port 5174 --host 0.0.0.0
+```
 
 ### 4. Production Build
 
@@ -154,7 +177,11 @@ Cost = (promptTokens × ratio + completionTokens × ratio × completionRatio) ×
 - Daily reports at 17:00
 - Filter tokens exceeding threshold
 - Includes: active tokens, total calls, token count, total cost
+- If Feishu rate-limits (e.g. `11232`), the service auto-retries with configured backoff
+- Supports over-budget reminder mentions (`<at>` when user-id mapping exists; fallback to text `@name`)
+- When Bitable config is provided, daily records are written to fields: time/person/cost/over-budget note
 - Manual test: \`GET /api/newapi/test-notify?date=2026-02-01\`
+- Online config page: `/newapi/feishu-config` (load/save config and trigger test push)
 
 ## LAN Access Configuration
 

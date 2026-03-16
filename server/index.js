@@ -13,6 +13,23 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const PRICES_FILE = path.join(__dirname, 'model-prices.json')
 const LOG_FILE = path.join(__dirname, 'cron.log')
+const DAILY_REPORT_STATE_FILE = path.join(__dirname, 'daily-report-state.json')
+const FEISHU_CONFIG_FILE = path.join(__dirname, 'feishu-config.json')
+const FEISHU_CONFIG_KEYS = [
+  'FEISHU_WEBHOOK_URL',
+  'FEISHU_ALERT_THRESHOLD',
+  'FEISHU_RETRY_MAX_ATTEMPTS',
+  'FEISHU_RETRY_DELAY_MS',
+  'FEISHU_USER_MAPPING',
+  'FEISHU_APP_ID',
+  'FEISHU_APP_SECRET',
+  'FEISHU_BITABLE_APP_TOKEN',
+  'FEISHU_BITABLE_TABLE_ID',
+  'FEISHU_BITABLE_DATE_FIELD',
+  'FEISHU_BITABLE_PERSON_FIELD',
+  'FEISHU_BITABLE_COST_FIELD',
+  'FEISHU_BITABLE_REMARK_FIELD'
+]
 
 const app = express()
 app.use(cors())
@@ -90,6 +107,68 @@ async function logToFile(message) {
   } catch (e) {
     console.error('Failed to write log:', e.message)
   }
+}
+
+function getBeijingNow() {
+  const now = new Date()
+  return new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000)
+}
+
+function getBeijingDateStr() {
+  const now = getBeijingNow()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+async function readDailyReportState() {
+  try {
+    const raw = await fs.readFile(DAILY_REPORT_STATE_FILE, 'utf8')
+    return JSON.parse(raw)
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return { lastSentDate: '' }
+    }
+    throw err
+  }
+}
+
+async function writeDailyReportState(lastSentDate) {
+  await fs.writeFile(DAILY_REPORT_STATE_FILE, JSON.stringify({ lastSentDate }, null, 2), 'utf8')
+}
+
+async function loadFeishuConfig() {
+  try {
+    const raw = await fs.readFile(FEISHU_CONFIG_FILE, 'utf8')
+    const parsed = JSON.parse(raw)
+    for (const key of FEISHU_CONFIG_KEYS) {
+      const envValue = process.env[key]
+      if (typeof envValue === 'string' && envValue.trim() !== '') {
+        continue
+      }
+
+      if (typeof parsed[key] === 'string' && parsed[key].trim() !== '') {
+        process.env[key] = parsed[key]
+      }
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn('Failed to load feishu config:', err.message)
+    }
+  }
+}
+
+async function saveFeishuConfig(nextConfig) {
+  await fs.writeFile(FEISHU_CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf8')
+}
+
+function getFeishuConfigView() {
+  const result = {}
+  for (const key of FEISHU_CONFIG_KEYS) {
+    result[key] = process.env[key] || ''
+  }
+  return result
 }
 
 async function resolvePersonalToken(tokenKey) {
@@ -536,41 +615,115 @@ app.post('/api/prices/bulk', async (req, res) => {
   }
 })
 
+app.get('/api/newapi/feishu-config', async (req, res) => {
+  try {
+    res.json(getFeishuConfigView())
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.put('/api/newapi/feishu-config', async (req, res) => {
+  try {
+    const payload = req.body || {}
+    const nextConfig = getFeishuConfigView()
+
+    for (const key of FEISHU_CONFIG_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(payload, key)) {
+        nextConfig[key] = String(payload[key] ?? '').trim()
+      }
+    }
+
+    for (const key of FEISHU_CONFIG_KEYS) {
+      process.env[key] = nextConfig[key]
+    }
+
+    await saveFeishuConfig(nextConfig)
+    res.json({ success: true, config: nextConfig })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 const PORT = process.env.PORT || 3001
-testConnection().then(() => {
+testConnection().then(async () => {
+  await loadFeishuConfig()
+
   const newApiDeps = setupNewApiRoutes(app)
+  const { sendDailyReport } = setupFeishuNotify(newApiDeps)
+  let catchUpInProgress = false
 
-  const webhookUrl = process.env.FEISHU_WEBHOOK_URL
-  if (webhookUrl) {
-    const { sendDailyReport } = setupFeishuNotify(newApiDeps)
+  const markReportSentIfSuccess = async (result) => {
+    if (result?.success && result?.date) {
+      await writeDailyReportState(result.date)
+    }
+  }
 
-    // 每日 17:00 (北京时间) = 09:00 UTC 推送日报
-    cron.schedule('0 9 * * *', async () => {
-      const now = new Date()
-      console.log('[CRON] Daily report triggered:', now.toISOString())
-      await logToFile(`Daily report triggered at ${now.toISOString()}`)
-      try {
-        const result = await sendDailyReport()
-        await logToFile(`Daily report sent: ${JSON.stringify(result)}`)
-      } catch (err) {
-        await logToFile(`Daily report failed: ${err.message}`)
+  const runMissedReportCatchUp = async (source) => {
+    try {
+      if (catchUpInProgress) {
+        return
       }
-    })
-    
-    console.log('[CRON] Daily report scheduled: 09:00 UTC (17:00 Beijing)')
-    logToFile('Server started, daily report scheduled for 09:00 UTC')
 
-    app.get('/api/newapi/test-notify', async (req, res) => {
-      try {
-        const result = await sendDailyReport(req.query.date)
-        res.json(result)
-      } catch (err) {
-        res.status(500).json({ error: err.message })
+      const now = getBeijingNow()
+      if (now.getHours() < 17) {
+        return
       }
-    })
-  } else {
+
+      catchUpInProgress = true
+
+      const state = await readDailyReportState()
+      const today = getBeijingDateStr()
+      if (state.lastSentDate === today) {
+        return
+      }
+
+      const result = await sendDailyReport(today)
+      await markReportSentIfSuccess(result)
+      await logToFile(`${source} catch-up report result: ${JSON.stringify(result)}`)
+    } catch (err) {
+      await logToFile(`${source} catch-up report failed: ${err.message}`)
+    } finally {
+      catchUpInProgress = false
+    }
+  }
+
+  // 每日 17:00 (北京时间) = 09:00 UTC 推送日报
+  cron.schedule('0 9 * * *', async () => {
+    const now = new Date()
+    console.log('[CRON] Daily report triggered:', now.toISOString())
+    await logToFile(`Daily report triggered at ${now.toISOString()}`)
+    try {
+      const result = await sendDailyReport()
+      await markReportSentIfSuccess(result)
+      await logToFile(`Daily report sent: ${JSON.stringify(result)}`)
+    } catch (err) {
+      await logToFile(`Daily report failed: ${err.message}`)
+    }
+  })
+
+  cron.schedule('10-59/10 9-15 * * *', async () => {
+    await runMissedReportCatchUp('Periodic')
+  })
+
+  console.log('[CRON] Daily report scheduled: 09:00 UTC (17:00 Beijing)')
+  logToFile('Server started, daily report scheduled for 09:00 UTC')
+
+  app.get('/api/newapi/test-notify', async (req, res) => {
+    try {
+      const result = await sendDailyReport(req.query.date)
+      await markReportSentIfSuccess(result)
+      res.json(result)
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  if (!process.env.FEISHU_WEBHOOK_URL) {
     console.log('Feishu notification disabled: FEISHU_WEBHOOK_URL not set')
   }
+
+  runMissedReportCatchUp('Startup')
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`)
