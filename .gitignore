@@ -44,6 +44,8 @@ Thumbs.db
 .sisyphus/
 .spec-workflow/
 AGENTS.md
+server/feishu-config.json
+server/daily-report-state.json
 
 # Screenshots
 *.png
