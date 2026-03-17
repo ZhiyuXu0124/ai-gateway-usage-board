@@ -11,7 +11,12 @@ let pricingConfig = {
 
 const CACHE_TTL = 5 * 60 * 1000
 const LEADERBOARD_CACHE_TTL = 30 * 1000
+const DASHBOARD_BOOTSTRAP_CACHE_TTL = 30 * 1000
+const GLOBAL_QUERY_CACHE_TTL = 30 * 1000
 const leaderboardCache = new Map()
+const dashboardBootstrapCache = new Map()
+const globalQueryCache = new Map()
+let pricingRefreshPromise = null
 
 function setLeaderboardCache(key, data) {
   if (leaderboardCache.size > 200) {
@@ -22,6 +27,70 @@ function setLeaderboardCache(key, data) {
     data,
     updatedAt: Date.now()
   })
+}
+
+function setDashboardBootstrapCache(key, data) {
+  if (dashboardBootstrapCache.size > 100) {
+    dashboardBootstrapCache.clear()
+  }
+
+  dashboardBootstrapCache.set(key, {
+    data,
+    updatedAt: Date.now()
+  })
+}
+
+function getTimedCache(cache, key, ttl) {
+  const hit = cache.get(key)
+  if (!hit) return null
+  if (Date.now() - hit.updatedAt >= ttl) {
+    cache.delete(key)
+    return null
+  }
+  return hit
+}
+
+function setTimedCache(cache, key, data) {
+  if (cache.size > 200) {
+    cache.clear()
+  }
+
+  cache.set(key, {
+    data,
+    updatedAt: Date.now(),
+    promise: null
+  })
+}
+
+async function getOrSetCached(cache, key, ttl, loader) {
+  const validHit = getTimedCache(cache, key, ttl)
+  if (validHit?.data) {
+    return validHit.data
+  }
+
+  const existing = cache.get(key)
+  if (existing?.promise) {
+    return existing.promise
+  }
+
+  const promise = (async () => {
+    try {
+      const data = await loader()
+      setTimedCache(cache, key, data)
+      return data
+    } catch (err) {
+      cache.delete(key)
+      throw err
+    }
+  })()
+
+  cache.set(key, {
+    data: null,
+    updatedAt: Date.now(),
+    promise
+  })
+
+  return promise
 }
 
 const BASE_PRICE_PER_TOKEN = 0.002 / 1000
@@ -50,37 +119,47 @@ export function setupNewApiRoutes(app) {
 
   async function refreshPricingConfig(pool) {
     if (Date.now() - pricingConfig.updatedAt < CACHE_TTL) return
-
-    try {
-      const res = await pool.query(`
-        SELECT key, value 
-        FROM options 
-        WHERE key IN ('ModelRatio', 'CompletionRatio', 'ModelPrice')
-      `)
-      
-      const newConfig = {
-        modelRatio: {},
-        completionRatio: {},
-        modelPrice: {},
-        updatedAt: Date.now()
-      }
-
-      res.rows.forEach(row => {
-        try {
-          const val = JSON.parse(row.value)
-          if (row.key === 'ModelRatio') newConfig.modelRatio = val
-          if (row.key === 'CompletionRatio') newConfig.completionRatio = val
-          if (row.key === 'ModelPrice') newConfig.modelPrice = val
-        } catch (e) {
-          console.error(`Failed to parse option ${row.key}`, e)
-        }
-      })
-
-      pricingConfig = newConfig
-      console.log('Pricing config refreshed')
-    } catch (err) {
-      console.error('Failed to refresh pricing config:', err)
+    if (pricingRefreshPromise) {
+      await pricingRefreshPromise
+      return
     }
+
+    pricingRefreshPromise = (async () => {
+      try {
+        const res = await pool.query(`
+          SELECT key, value 
+          FROM options 
+          WHERE key IN ('ModelRatio', 'CompletionRatio', 'ModelPrice')
+        `)
+        
+        const newConfig = {
+          modelRatio: {},
+          completionRatio: {},
+          modelPrice: {},
+          updatedAt: Date.now()
+        }
+
+        res.rows.forEach(row => {
+          try {
+            const val = JSON.parse(row.value)
+            if (row.key === 'ModelRatio') newConfig.modelRatio = val
+            if (row.key === 'CompletionRatio') newConfig.completionRatio = val
+            if (row.key === 'ModelPrice') newConfig.modelPrice = val
+          } catch (e) {
+            console.error(`Failed to parse option ${row.key}`, e)
+          }
+        })
+
+        pricingConfig = newConfig
+        console.log('Pricing config refreshed')
+      } catch (err) {
+        console.error('Failed to refresh pricing config:', err)
+      } finally {
+        pricingRefreshPromise = null
+      }
+    })()
+
+    await pricingRefreshPromise
   }
 
   function calculateCost(modelName, promptTokens, completionTokens, count = 1) {
@@ -276,8 +355,8 @@ export function setupNewApiRoutes(app) {
     return { summary, models: withRatio }
   }
 
-  app.get('/api/newapi/overview', async (req, res) => {
-    try {
+  async function getOverviewData() {
+    return getOrSetCached(globalQueryCache, 'overview', GLOBAL_QUERY_CACHE_TTL, async () => {
       const result = await pgPool.query(`
         SELECT 
           model_name,
@@ -299,7 +378,7 @@ export function setupNewApiRoutes(app) {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
-        
+
         totalCostUSD += calculateCost(r.model_name, p, c, count)
         totalTokens += (p + c)
         totalPromptTokens += p
@@ -307,24 +386,19 @@ export function setupNewApiRoutes(app) {
         totalRequests += count
       })
 
-      res.json({
+      return {
         totalCost: totalCostUSD,
         totalCostCNY: totalCostUSD * EXCHANGE_RATE,
         totalTokens,
         totalPromptTokens,
         totalCompletionTokens,
         totalRequests
-      })
-    } catch (err) {
-      res.status(500).json({ error: err.message })
-    }
-  })
+      }
+    })
+  }
 
-  app.get('/api/newapi/daily-overview', async (req, res) => {
-    try {
-      const { date } = req.query
-      if (!date) return res.status(400).json({ error: 'Missing date param' })
-
+  async function getDailyOverviewData(date) {
+    return getOrSetCached(globalQueryCache, `daily-overview:${date}`, GLOBAL_QUERY_CACHE_TTL, async () => {
       const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
       const dayEnd = dayStart + 86400
 
@@ -351,7 +425,7 @@ export function setupNewApiRoutes(app) {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
-        
+
         totalCostUSD += calculateCost(r.model_name, p, c, count)
         totalTokens += (p + c)
         totalPromptTokens += p
@@ -359,7 +433,7 @@ export function setupNewApiRoutes(app) {
         totalRequests += count
       })
 
-      res.json({
+      return {
         date,
         totalCost: totalCostUSD,
         totalCostCNY: totalCostUSD * EXCHANGE_RATE,
@@ -367,160 +441,148 @@ export function setupNewApiRoutes(app) {
         totalPromptTokens,
         totalCompletionTokens,
         totalRequests
-      })
-    } catch (err) {
-      res.status(500).json({ error: err.message })
+      }
+    })
+  }
+
+  async function getLeaderboardData({ date, type = 'cost', limit = '20' }) {
+    const limitNum = Math.min(parseInt(limit) || 20, 100)
+    const cacheKey = `${date || 'all'}|${type}|${limitNum}`
+    const cacheHit = leaderboardCache.get(cacheKey)
+
+    if (cacheHit && Date.now() - cacheHit.updatedAt < LEADERBOARD_CACHE_TTL) {
+      return cacheHit.data
     }
-  })
 
-  app.get('/api/newapi/leaderboard', async (req, res) => {
-    try {
-      const { date, type = 'cost', limit = '20' } = req.query
-      const limitNum = Math.min(parseInt(limit) || 20, 100)
-      const cacheKey = `${date || 'all'}|${type}|${limitNum}`
-      const cacheHit = leaderboardCache.get(cacheKey)
+    if (type === 'tokens' || type === 'requests') {
+      const params = []
+      let whereClause = 'l.type = 2 AND l.token_id IS NOT NULL'
 
-      if (cacheHit && Date.now() - cacheHit.updatedAt < LEADERBOARD_CACHE_TTL) {
-        return res.json(cacheHit.data)
-      }
-
-      if (type === 'tokens' || type === 'requests') {
-        const params = []
-        let whereClause = 'l.type = 2 AND l.token_id IS NOT NULL'
-
-        if (date) {
-          const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
-          const dayEnd = dayStart + 86400
-          params.push(dayStart, dayEnd)
-          whereClause += ' AND l.created_at >= $1 AND l.created_at < $2'
-        }
-
-        const orderExpr = type === 'tokens' ? 'total_tokens' : 'total_requests'
-        const limitPlaceholder = `$${params.length + 1}`
-        params.push(limitNum)
-
-        const result = await pgPool.query(`
-          SELECT
-            l.token_id,
-            ${getTokenDisplayExpr()} as token_name,
-            SUM(l.prompt_tokens + l.completion_tokens) as total_tokens,
-            COUNT(*) as total_requests
-          FROM logs l
-          LEFT JOIN tokens t ON t.id = l.token_id
-          WHERE ${whereClause}
-          GROUP BY l.token_id
-          ORDER BY ${orderExpr} DESC
-          LIMIT ${limitPlaceholder}
-        `, params)
-
-        const rows = result.rows.map((row, idx) => ({
-          tokenId: Number(row.token_id),
-          tokenName: row.token_name,
-          totalCost: 0,
-          totalCostCNY: 0,
-          totalTokens: Number(row.total_tokens),
-          totalRequests: Number(row.total_requests),
-          rank: idx + 1
-        }))
-
-        setLeaderboardCache(cacheKey, rows)
-
-        return res.json(rows)
-      }
-
-      let query, params
       if (date) {
         const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
         const dayEnd = dayStart + 86400
-        query = `
-          SELECT 
-            l.token_id,
-            ${getTokenDisplayExpr()} as token_name,
-            l.model_name,
-            SUM(l.prompt_tokens) as p_tokens,
-            SUM(l.completion_tokens) as c_tokens,
-            COUNT(*) as cnt
-          FROM logs l
-          LEFT JOIN tokens t ON t.id = l.token_id
-          WHERE l.type = 2 
-            AND l.token_id IS NOT NULL
-            AND l.created_at >= $1 
-            AND l.created_at < $2
-          GROUP BY l.token_id, l.model_name
-        `
-        params = [dayStart, dayEnd]
-      } else {
-        query = `
-          SELECT 
-            l.token_id,
-            ${getTokenDisplayExpr()} as token_name,
-            l.model_name,
-            SUM(l.prompt_tokens) as p_tokens,
-            SUM(l.completion_tokens) as c_tokens,
-            COUNT(*) as cnt
-          FROM logs l
-          LEFT JOIN tokens t ON t.id = l.token_id
-          WHERE l.type = 2 AND l.token_id IS NOT NULL
-          GROUP BY l.token_id, l.model_name
-        `
-        params = []
+        params.push(dayStart, dayEnd)
+        whereClause += ' AND l.created_at >= $1 AND l.created_at < $2'
       }
 
-      const result = await pgPool.query(query, params)
-      
-      const userMap = {}
-      
-      result.rows.forEach(r => {
-        const tokenId = Number(r.token_id)
-        if (!userMap[tokenId]) {
-          userMap[tokenId] = {
-            tokenId,
-            tokenName: r.token_name,
-            totalCost: 0,
-            totalTokens: 0,
-            totalRequests: 0
-          }
-        }
-        
-        const p = Number(r.p_tokens)
-        const c = Number(r.c_tokens)
-        const count = Number(r.cnt)
-        const cost = calculateCost(r.model_name, p, c, count)
-        
-        userMap[tokenId].totalCost += cost
-        userMap[tokenId].totalTokens += (p + c)
-        userMap[tokenId].totalRequests += count
-      })
+      const orderExpr = type === 'tokens' ? 'total_tokens' : 'total_requests'
+      const limitPlaceholder = `$${params.length + 1}`
+      params.push(limitNum)
 
-      let sorted = Object.values(userMap)
-      
-      if (type === 'tokens') {
-        sorted.sort((a, b) => b.totalTokens - a.totalTokens)
-      } else if (type === 'requests') {
-        sorted.sort((a, b) => b.totalRequests - a.totalRequests)
-      } else {
-        sorted.sort((a, b) => b.totalCost - a.totalCost)
-      }
+      const result = await pgPool.query(`
+        SELECT
+          l.token_id,
+          ${getTokenDisplayExpr()} as token_name,
+          SUM(l.prompt_tokens + l.completion_tokens) as total_tokens,
+          COUNT(*) as total_requests
+        FROM logs l
+        LEFT JOIN tokens t ON t.id = l.token_id
+        WHERE ${whereClause}
+        GROUP BY l.token_id
+        ORDER BY ${orderExpr} DESC
+        LIMIT ${limitPlaceholder}
+      `, params)
 
-      const topN = sorted.slice(0, limitNum).map((item, idx) => ({
-        ...item,
-        rank: idx + 1,
-        totalCostCNY: item.totalCost * EXCHANGE_RATE
+      const rows = result.rows.map((row, idx) => ({
+        tokenId: Number(row.token_id),
+        tokenName: row.token_name,
+        totalCost: 0,
+        totalCostCNY: 0,
+        totalTokens: Number(row.total_tokens),
+        totalRequests: Number(row.total_requests),
+        rank: idx + 1
       }))
 
-      setLeaderboardCache(cacheKey, topN)
-
-      res.json(topN)
-    } catch (err) {
-      res.status(500).json({ error: err.message })
+      setLeaderboardCache(cacheKey, rows)
+      return rows
     }
-  })
 
-  app.get('/api/newapi/trend', async (req, res) => {
-    try {
-      const days = Math.min(parseInt(req.query.days) || 30, 90)
+    let query
+    let params
+    if (date) {
+      const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
+      const dayEnd = dayStart + 86400
+      query = `
+        SELECT 
+          l.token_id,
+          ${getTokenDisplayExpr()} as token_name,
+          l.model_name,
+          SUM(l.prompt_tokens) as p_tokens,
+          SUM(l.completion_tokens) as c_tokens,
+          COUNT(*) as cnt
+        FROM logs l
+        LEFT JOIN tokens t ON t.id = l.token_id
+        WHERE l.type = 2 
+          AND l.token_id IS NOT NULL
+          AND l.created_at >= $1 
+          AND l.created_at < $2
+        GROUP BY l.token_id, l.model_name
+      `
+      params = [dayStart, dayEnd]
+    } else {
+      query = `
+        SELECT 
+          l.token_id,
+          ${getTokenDisplayExpr()} as token_name,
+          l.model_name,
+          SUM(l.prompt_tokens) as p_tokens,
+          SUM(l.completion_tokens) as c_tokens,
+          COUNT(*) as cnt
+        FROM logs l
+        LEFT JOIN tokens t ON t.id = l.token_id
+        WHERE l.type = 2 AND l.token_id IS NOT NULL
+        GROUP BY l.token_id, l.model_name
+      `
+      params = []
+    }
+
+    const result = await pgPool.query(query, params)
+    const userMap = {}
+
+    result.rows.forEach(r => {
+      const tokenId = Number(r.token_id)
+      if (!userMap[tokenId]) {
+        userMap[tokenId] = {
+          tokenId,
+          tokenName: r.token_name,
+          totalCost: 0,
+          totalTokens: 0,
+          totalRequests: 0
+        }
+      }
+
+      const p = Number(r.p_tokens)
+      const c = Number(r.c_tokens)
+      const count = Number(r.cnt)
+      const cost = calculateCost(r.model_name, p, c, count)
+
+      userMap[tokenId].totalCost += cost
+      userMap[tokenId].totalTokens += (p + c)
+      userMap[tokenId].totalRequests += count
+    })
+
+    let sorted = Object.values(userMap)
+    if (type === 'tokens') {
+      sorted.sort((a, b) => b.totalTokens - a.totalTokens)
+    } else if (type === 'requests') {
+      sorted.sort((a, b) => b.totalRequests - a.totalRequests)
+    } else {
+      sorted.sort((a, b) => b.totalCost - a.totalCost)
+    }
+
+    const topN = sorted.slice(0, limitNum).map((item, idx) => ({
+      ...item,
+      rank: idx + 1,
+      totalCostCNY: item.totalCost * EXCHANGE_RATE
+    }))
+
+    setLeaderboardCache(cacheKey, topN)
+    return topN
+  }
+
+  async function getTrendData(days = 30) {
+    return getOrSetCached(globalQueryCache, `trend:${days}`, GLOBAL_QUERY_CACHE_TTL, async () => {
       const startTs = Math.floor(Date.now() / 1000) - days * 86400
-
       const result = await pgPool.query(`
         SELECT 
           TO_CHAR(TO_TIMESTAMP(created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') as date,
@@ -535,7 +597,6 @@ export function setupNewApiRoutes(app) {
       `, [startTs])
 
       const dateMap = {}
-      
       result.rows.forEach(r => {
         if (!dateMap[r.date]) {
           dateMap[r.date] = {
@@ -543,19 +604,18 @@ export function setupNewApiRoutes(app) {
             totalCost: 0,
             totalTokens: 0,
             totalRequests: 0,
-            models: [] 
+            models: []
           }
         }
-        
+
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
         const cost = calculateCost(r.model_name, p, c, count)
-        
+
         dateMap[r.date].totalCost += cost
         dateMap[r.date].totalTokens += (p + c)
         dateMap[r.date].totalRequests += count
-        
         dateMap[r.date].models.push({
           modelName: r.model_name,
           costCNY: cost * EXCHANGE_RATE,
@@ -564,23 +624,16 @@ export function setupNewApiRoutes(app) {
         })
       })
 
-      const sortedTrend = Object.values(dateMap)
+      return Object.values(dateMap)
         .sort((a, b) => a.date.localeCompare(b.date))
-        .map(item => ({
-          ...item,
-          totalCostCNY: item.totalCost * EXCHANGE_RATE
-        }))
+        .map(item => ({ ...item, totalCostCNY: item.totalCost * EXCHANGE_RATE }))
+    })
+  }
 
-      res.json(sortedTrend)
-    } catch (err) {
-      res.status(500).json({ error: err.message })
-    }
-  })
-
-  app.get('/api/newapi/model-distribution', async (req, res) => {
-    try {
-      const { date } = req.query
-      let query, params
+  async function getModelDistributionData(date) {
+    return getOrSetCached(globalQueryCache, `model-distribution:${date || 'all'}`, GLOBAL_QUERY_CACHE_TTL, async () => {
+      let query
+      let params
 
       if (date) {
         const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
@@ -613,14 +666,13 @@ export function setupNewApiRoutes(app) {
       }
 
       const result = await pgPool.query(query, params)
-      
       let allModels = result.rows.map(r => {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
         const cost = calculateCost(r.model_name, p, c, count)
         const tokens = p + c
-        
+
         return {
           modelName: r.model_name,
           totalCost: cost,
@@ -631,22 +683,18 @@ export function setupNewApiRoutes(app) {
       })
 
       const totalCostAll = allModels.reduce((sum, m) => sum + m.totalCost, 0)
-      
       allModels = allModels.map(m => ({
         ...m,
         percentage: totalCostAll > 0 ? (m.totalCost / totalCostAll * 100) : 0
       }))
 
       allModels.sort((a, b) => b.totalCost - a.totalCost)
-      
-      res.json(allModels.slice(0, 20))
-    } catch (err) {
-      res.status(500).json({ error: err.message })
-    }
-  })
+      return allModels.slice(0, 20)
+    })
+  }
 
-  app.get('/api/newapi/available-dates', async (req, res) => {
-    try {
+  async function getAvailableDatesData() {
+    return getOrSetCached(globalQueryCache, 'available-dates', GLOBAL_QUERY_CACHE_TTL, async () => {
       const result = await pgPool.query(`
         SELECT DISTINCT 
           TO_CHAR(TO_TIMESTAMP(created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') as date
@@ -654,7 +702,93 @@ export function setupNewApiRoutes(app) {
         WHERE type = 2
         ORDER BY date DESC
       `)
-      res.json(result.rows.map(r => r.date))
+      return result.rows.map(r => r.date)
+    })
+  }
+
+  app.get('/api/newapi/overview', async (req, res) => {
+    try {
+      res.json(await getOverviewData())
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/daily-overview', async (req, res) => {
+    try {
+      const { date } = req.query
+      if (!date) return res.status(400).json({ error: 'Missing date param' })
+      res.json(await getDailyOverviewData(date))
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/leaderboard', async (req, res) => {
+    try {
+      res.json(await getLeaderboardData(req.query))
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/trend', async (req, res) => {
+    try {
+      const days = Math.min(parseInt(req.query.days) || 30, 90)
+      res.json(await getTrendData(days))
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/model-distribution', async (req, res) => {
+    try {
+      res.json(await getModelDistributionData(req.query.date))
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/available-dates', async (req, res) => {
+    try {
+      res.json(await getAvailableDatesData())
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  app.get('/api/newapi/dashboard-bootstrap', async (req, res) => {
+    try {
+      const { date, leaderboardType = 'quota', leaderboardTab = 'daily' } = req.query
+      const selectedDate = date || new Date().toISOString().slice(0, 10)
+      const leaderboardDate = leaderboardTab === 'daily' ? selectedDate : undefined
+      const cacheKey = `${selectedDate}|${leaderboardType}|${leaderboardTab}`
+      const cacheHit = dashboardBootstrapCache.get(cacheKey)
+
+      if (cacheHit && Date.now() - cacheHit.updatedAt < DASHBOARD_BOOTSTRAP_CACHE_TTL) {
+        return res.json(cacheHit.data)
+      }
+
+      const [overview, availableDates, trend, dailyOverview, leaderboard, modelDistribution] = await Promise.all([
+        getOverviewData(),
+        getAvailableDatesData(),
+        getTrendData(30),
+        getDailyOverviewData(selectedDate),
+        getLeaderboardData({ date: leaderboardDate, type: leaderboardType, limit: '20' }),
+        getModelDistributionData(leaderboardDate)
+      ])
+
+      const payload = {
+        overview,
+        availableDates,
+        trend,
+        dailyOverview,
+        leaderboard,
+        modelDistribution,
+        generatedAt: new Date().toISOString()
+      }
+      setDashboardBootstrapCache(cacheKey, payload)
+      res.json(payload)
     } catch (err) {
       res.status(500).json({ error: err.message })
     }
