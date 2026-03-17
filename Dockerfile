@@ -1,4 +1,4 @@
-FROM node:22-bullseye-slim
+FROM node:22-bullseye-slim AS build
 
 WORKDIR /app
 
@@ -6,7 +6,18 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+RUN npm run build && npm prune --omit=dev
 
-EXPOSE 5173
+FROM node:22-bullseye-slim
 
-CMD ["npm", "run", "dev"]
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --from=build /app/package*.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/server ./server
+COPY --from=build /app/dist ./dist
+
+EXPOSE 3001
+
+CMD ["npm", "run", "start"]

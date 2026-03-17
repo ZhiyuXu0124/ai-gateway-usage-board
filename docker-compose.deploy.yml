@@ -1,9 +1,6 @@
 services:
   app:
     image: ai-gateway-usage-board
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: ai-gateway-usage-board
     restart: unless-stopped
     env_file:

@@ -11,6 +11,8 @@ import { setupFeishuNotify } from './feishu-notify.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const DIST_DIR = path.join(__dirname, '..', 'dist')
+const DIST_INDEX_FILE = path.join(DIST_DIR, 'index.html')
 const PRICES_FILE = path.join(__dirname, 'model-prices.json')
 const LOG_FILE = path.join(__dirname, 'cron.log')
 const DAILY_REPORT_STATE_FILE = path.join(__dirname, 'daily-report-state.json')
@@ -161,6 +163,35 @@ async function loadFeishuConfig() {
 
 async function saveFeishuConfig(nextConfig) {
   await fs.writeFile(FEISHU_CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf8')
+}
+
+async function configureStaticAssets() {
+  try {
+    await fs.access(DIST_INDEX_FILE)
+  } catch {
+    return false
+  }
+
+  app.use(express.static(DIST_DIR, {
+    index: false,
+    maxAge: '1h',
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache')
+        return
+      }
+
+      if (filePath.includes('/assets/')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      }
+    }
+  }))
+
+  app.get(/^(?!\/api).*/, (req, res) => {
+    res.sendFile(DIST_INDEX_FILE)
+  })
+
+  return true
 }
 
 function getFeishuConfigView() {
@@ -648,6 +679,7 @@ app.put('/api/newapi/feishu-config', async (req, res) => {
 const PORT = process.env.PORT || 3001
 testConnection().then(async () => {
   await loadFeishuConfig()
+  const hasStaticAssets = await configureStaticAssets()
 
   const newApiDeps = setupNewApiRoutes(app)
   const { sendDailyReport } = setupFeishuNotify(newApiDeps)
@@ -727,5 +759,8 @@ testConnection().then(async () => {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`)
+    if (hasStaticAssets) {
+      console.log(`Serving static frontend from ${DIST_DIR}`)
+    }
   })
 })
