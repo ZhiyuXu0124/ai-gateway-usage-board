@@ -1058,34 +1058,40 @@ export default function NewApiDashboard() {
   const fetchData = useCallback(async (signal) => {
     setLoading(true);
     try {
-      const headers = { 'Content-Type': 'application/json' };
-      
-      const [
-        overviewRes,
-        datesRes,
-        trendRes,
-        dailyRes,
-        leaderboardRes,
-        modelRes
-      ] = await Promise.all([
-        fetchJson('/api/newapi/overview', { headers, signal }),
-        fetchJson('/api/newapi/available-dates', { headers, signal }),
-        fetchJson('/api/newapi/trend?days=30', { headers, signal }),
-        fetchJson(`/api/newapi/daily-overview?date=${selectedDate}`, { headers, signal }),
-        fetchJson(`/api/newapi/leaderboard?type=${leaderboardType}&limit=20${leaderboardTab === 'daily' ? `&date=${selectedDate}` : ''}`, { headers, signal }),
-        fetchJson(`/api/newapi/model-distribution${leaderboardTab === 'daily' ? `?date=${selectedDate}` : ''}`, { headers, signal })
-      ]);
+      let bootstrap;
+      try {
+        bootstrap = await fetchJson(
+          `/api/newapi/dashboard-bootstrap?date=${selectedDate}&leaderboardType=${leaderboardType}&leaderboardTab=${leaderboardTab}`,
+          { signal, timeoutMs: 12000 }
+        );
+      } catch (bootstrapError) {
+        if (bootstrapError.name === 'AbortError') {
+          throw bootstrapError;
+        }
+
+        const headers = { 'Content-Type': 'application/json' };
+        const [overview, availableDates, trend, dailyOverview, leaderboard, modelDistribution] = await Promise.all([
+          fetchJson('/api/newapi/overview', { headers, signal }),
+          fetchJson('/api/newapi/available-dates', { headers, signal }),
+          fetchJson('/api/newapi/trend?days=30', { headers, signal }),
+          fetchJson(`/api/newapi/daily-overview?date=${selectedDate}`, { headers, signal }),
+          fetchJson(`/api/newapi/leaderboard?type=${leaderboardType}&limit=20${leaderboardTab === 'daily' ? `&date=${selectedDate}` : ''}`, { headers, signal }),
+          fetchJson(`/api/newapi/model-distribution${leaderboardTab === 'daily' ? `?date=${selectedDate}` : ''}`, { headers, signal })
+        ]);
+
+        bootstrap = { overview, availableDates, trend, dailyOverview, leaderboard, modelDistribution, generatedAt: new Date().toISOString() };
+      }
 
       if (signal?.aborted) return;
 
-      setOverview(overviewRes);
-      setAvailableDates(datesRes || []);
-      setTrend(trendRes || []);
-      setDailyOverview(dailyRes);
-      setLeaderboard(leaderboardRes || []);
-      setModelDist(modelRes || []);
+      setOverview(bootstrap.overview);
+      setAvailableDates(bootstrap.availableDates || []);
+      setTrend(bootstrap.trend || []);
+      setDailyOverview(bootstrap.dailyOverview);
+      setLeaderboard(bootstrap.leaderboard || []);
+      setModelDist(bootstrap.modelDistribution || []);
       
-      setLastUpdated(new Date());
+      setLastUpdated(bootstrap.generatedAt ? new Date(bootstrap.generatedAt) : new Date());
     } catch (error) {
       if (error.name !== 'AbortError') {
         console.error('Failed to fetch dashboard data:', error);
