@@ -11,5 +11,6 @@ services:
     environment:
       PORT: 3001
       FEISHU_ALERT_THRESHOLD: ${FEISHU_ALERT_THRESHOLD:-100}
+      FEISHU_DISABLED: '1'
     ports:
       - '5173:3001'

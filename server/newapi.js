@@ -94,7 +94,7 @@ async function getOrSetCached(cache, key, ttl, loader) {
 }
 
 const BASE_PRICE_PER_TOKEN = 0.002 / 1000
-export const EXCHANGE_RATE = 7.2
+export const EXCHANGE_RATE = parseFloat(process.env.NEWAPI_EXCHANGE_RATE) || 7.3
 
 export function setupNewApiRoutes(app) {
   const pgPool = new Pool({
@@ -117,6 +117,8 @@ export function setupNewApiRoutes(app) {
       console.error('NewAPI PostgreSQL connection failed:', err.message)
     })
 
+  let exchangeRate = parseFloat(process.env.NEWAPI_EXCHANGE_RATE) || EXCHANGE_RATE
+
   async function refreshPricingConfig(pool) {
     if (Date.now() - pricingConfig.updatedAt < CACHE_TTL) return
     if (pricingRefreshPromise) {
@@ -127,11 +129,11 @@ export function setupNewApiRoutes(app) {
     pricingRefreshPromise = (async () => {
       try {
         const res = await pool.query(`
-          SELECT key, value 
-          FROM options 
-          WHERE key IN ('ModelRatio', 'CompletionRatio', 'ModelPrice')
+          SELECT key, value
+          FROM options
+          WHERE key IN ('ModelRatio', 'CompletionRatio', 'ModelPrice', 'GroupRatio')
         `)
-        
+
         const newConfig = {
           modelRatio: {},
           completionRatio: {},
@@ -162,20 +164,13 @@ export function setupNewApiRoutes(app) {
     await pricingRefreshPromise
   }
 
-  function calculateCost(modelName, promptTokens, completionTokens, count = 1) {
+  function calculateCostCNY(modelName, promptTokens, completionTokens) {
     if (!modelName) return 0
-    
-    if (pricingConfig.modelPrice[modelName] !== undefined) {
-      return pricingConfig.modelPrice[modelName] * count
-    }
-
-    const ratio = pricingConfig.modelRatio[modelName] ?? 30
+    const ratio = pricingConfig.modelRatio[modelName] ?? 0
+    if (ratio === 0) return 0
     const completionRatio = pricingConfig.completionRatio[modelName] ?? 1
-
-    const inputCost = promptTokens * ratio * BASE_PRICE_PER_TOKEN
-    const outputCost = completionTokens * ratio * completionRatio * BASE_PRICE_PER_TOKEN
-    
-    return inputCost + outputCost
+    const costUSD = (promptTokens * ratio + completionTokens * ratio * completionRatio) * BASE_PRICE_PER_TOKEN
+    return costUSD * exchangeRate
   }
 
   const ensurePricing = async (req, res, next) => {
@@ -319,7 +314,7 @@ export function setupNewApiRoutes(app) {
       const completionTokens = Number(r.c_tokens)
       const totalTokens = promptTokens + completionTokens
       const requests = Number(r.cnt)
-      const totalCostUSD = calculateCost(r.model_name, promptTokens, completionTokens, requests)
+      const totalCostCNY = calculateCostCNY(r.model_name, promptTokens, completionTokens)
 
       return {
         modelName: r.model_name,
@@ -327,8 +322,8 @@ export function setupNewApiRoutes(app) {
         completionTokens,
         totalTokens,
         requests,
-        totalCost: totalCostUSD,
-        totalCostCNY: totalCostUSD * EXCHANGE_RATE
+        totalCost: totalCostCNY / EXCHANGE_RATE,
+        totalCostCNY
       }
     })
 
@@ -358,17 +353,17 @@ export function setupNewApiRoutes(app) {
   async function getOverviewData() {
     return getOrSetCached(globalQueryCache, 'overview', GLOBAL_QUERY_CACHE_TTL, async () => {
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
+        FROM logs
         WHERE type = 2
         GROUP BY model_name
       `)
 
-      let totalCostUSD = 0
+      let totalCostCNY = 0
       let totalTokens = 0
       let totalPromptTokens = 0
       let totalCompletionTokens = 0
@@ -377,18 +372,17 @@ export function setupNewApiRoutes(app) {
       result.rows.forEach(r => {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
-        const count = Number(r.cnt)
 
-        totalCostUSD += calculateCost(r.model_name, p, c, count)
+        totalCostCNY += calculateCostCNY(r.model_name, p, c)
         totalTokens += (p + c)
         totalPromptTokens += p
         totalCompletionTokens += c
-        totalRequests += count
+        totalRequests += Number(r.cnt)
       })
 
       return {
-        totalCost: totalCostUSD,
-        totalCostCNY: totalCostUSD * EXCHANGE_RATE,
+        totalCost: totalCostCNY / EXCHANGE_RATE,
+        totalCostCNY,
         totalTokens,
         totalPromptTokens,
         totalCompletionTokens,
@@ -403,19 +397,19 @@ export function setupNewApiRoutes(app) {
       const dayEnd = dayStart + 86400
 
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
-        WHERE type = 2 
-          AND created_at >= $1 
+        FROM logs
+        WHERE type = 2
+          AND created_at >= $1
           AND created_at < $2
         GROUP BY model_name
       `, [dayStart, dayEnd])
 
-      let totalCostUSD = 0
+      let totalCostCNY = 0
       let totalTokens = 0
       let totalPromptTokens = 0
       let totalCompletionTokens = 0
@@ -424,19 +418,18 @@ export function setupNewApiRoutes(app) {
       result.rows.forEach(r => {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
-        const count = Number(r.cnt)
 
-        totalCostUSD += calculateCost(r.model_name, p, c, count)
+        totalCostCNY += calculateCostCNY(r.model_name, p, c)
         totalTokens += (p + c)
         totalPromptTokens += p
         totalCompletionTokens += c
-        totalRequests += count
+        totalRequests += Number(r.cnt)
       })
 
       return {
         date,
-        totalCost: totalCostUSD,
-        totalCostCNY: totalCostUSD * EXCHANGE_RATE,
+        totalCost: totalCostCNY / EXCHANGE_RATE,
+        totalCostCNY,
         totalTokens,
         totalPromptTokens,
         totalCompletionTokens,
@@ -503,7 +496,7 @@ export function setupNewApiRoutes(app) {
       const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
       const dayEnd = dayStart + 86400
       query = `
-        SELECT 
+        SELECT
           l.token_id,
           ${getTokenDisplayExpr()} as token_name,
           l.model_name,
@@ -512,16 +505,16 @@ export function setupNewApiRoutes(app) {
           COUNT(*) as cnt
         FROM logs l
         LEFT JOIN tokens t ON t.id = l.token_id
-        WHERE l.type = 2 
+        WHERE l.type = 2
           AND l.token_id IS NOT NULL
-          AND l.created_at >= $1 
+          AND l.created_at >= $1
           AND l.created_at < $2
         GROUP BY l.token_id, l.model_name
       `
       params = [dayStart, dayEnd]
     } else {
       query = `
-        SELECT 
+        SELECT
           l.token_id,
           ${getTokenDisplayExpr()} as token_name,
           l.model_name,
@@ -554,9 +547,9 @@ export function setupNewApiRoutes(app) {
       const p = Number(r.p_tokens)
       const c = Number(r.c_tokens)
       const count = Number(r.cnt)
-      const cost = calculateCost(r.model_name, p, c, count)
+      const costCNY = calculateCostCNY(r.model_name, p, c)
 
-      userMap[tokenId].totalCost += cost
+      userMap[tokenId].totalCost += costCNY / EXCHANGE_RATE
       userMap[tokenId].totalTokens += (p + c)
       userMap[tokenId].totalRequests += count
     })
@@ -584,13 +577,13 @@ export function setupNewApiRoutes(app) {
     return getOrSetCached(globalQueryCache, `trend:${days}`, GLOBAL_QUERY_CACHE_TTL, async () => {
       const startTs = Math.floor(Date.now() / 1000) - days * 86400
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           TO_CHAR(TO_TIMESTAMP(created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') as date,
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
+        FROM logs
         WHERE type = 2 AND created_at >= $1
         GROUP BY date, model_name
         ORDER BY date
@@ -611,14 +604,14 @@ export function setupNewApiRoutes(app) {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
-        const cost = calculateCost(r.model_name, p, c, count)
+        const costCNY = calculateCostCNY(r.model_name, p, c)
 
-        dateMap[r.date].totalCost += cost
+        dateMap[r.date].totalCost += costCNY / EXCHANGE_RATE
         dateMap[r.date].totalTokens += (p + c)
         dateMap[r.date].totalRequests += count
         dateMap[r.date].models.push({
           modelName: r.model_name,
-          costCNY: cost * EXCHANGE_RATE,
+          costCNY,
           tokens: p + c,
           requests: count
         })
@@ -639,26 +632,26 @@ export function setupNewApiRoutes(app) {
         const dayStart = Math.floor(new Date(date + 'T00:00:00+08:00').getTime() / 1000)
         const dayEnd = dayStart + 86400
         query = `
-          SELECT 
+          SELECT
             model_name,
             SUM(prompt_tokens) as p_tokens,
             SUM(completion_tokens) as c_tokens,
             COUNT(*) as cnt
-          FROM logs 
-          WHERE type = 2 
-            AND created_at >= $1 
+          FROM logs
+          WHERE type = 2
+            AND created_at >= $1
             AND created_at < $2
           GROUP BY model_name
         `
         params = [dayStart, dayEnd]
       } else {
         query = `
-          SELECT 
+          SELECT
             model_name,
             SUM(prompt_tokens) as p_tokens,
             SUM(completion_tokens) as c_tokens,
             COUNT(*) as cnt
-          FROM logs 
+          FROM logs
           WHERE type = 2
           GROUP BY model_name
         `
@@ -670,13 +663,13 @@ export function setupNewApiRoutes(app) {
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
-        const cost = calculateCost(r.model_name, p, c, count)
+        const costCNY = calculateCostCNY(r.model_name, p, c)
         const tokens = p + c
 
         return {
           modelName: r.model_name,
-          totalCost: cost,
-          totalCostCNY: cost * EXCHANGE_RATE,
+          totalCost: costCNY / EXCHANGE_RATE,
+          totalCostCNY: costCNY,
           totalTokens: tokens,
           totalRequests: count
         }
@@ -816,20 +809,20 @@ export function setupNewApiRoutes(app) {
       }
 
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           TO_CHAR(TO_TIMESTAMP(created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') as date,
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
+        FROM logs
         WHERE ${whereClause}
         GROUP BY date, model_name
         ORDER BY date
       `, params)
 
       const dateMap = {}
-      
+
       result.rows.forEach(r => {
         if (!dateMap[r.date]) {
           dateMap[r.date] = {
@@ -837,22 +830,22 @@ export function setupNewApiRoutes(app) {
             totalCost: 0,
             totalTokens: 0,
             totalRequests: 0,
-            models: [] 
+            models: []
           }
         }
-        
+
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
-        const cost = calculateCost(r.model_name, p, c, count)
-        
-        dateMap[r.date].totalCost += cost
+        const costCNY = calculateCostCNY(r.model_name, p, c)
+
+        dateMap[r.date].totalCost += costCNY / EXCHANGE_RATE
         dateMap[r.date].totalTokens += (p + c)
         dateMap[r.date].totalRequests += count
-        
+
         dateMap[r.date].models.push({
           modelName: r.model_name,
-          costCNY: cost * EXCHANGE_RATE,
+          costCNY,
           tokens: p + c,
           requests: count
         })
@@ -877,21 +870,21 @@ export function setupNewApiRoutes(app) {
       if (!userFilter) return res.status(400).json({ error: 'Missing or invalid token/token_name' })
 
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
+        FROM logs
         WHERE type = 2 AND ${userFilter.whereExpr}
         GROUP BY model_name
       `, userFilter.params)
 
-      let totalCostUSD = 0, totalTokens = 0, totalPromptTokens = 0, totalCompletionTokens = 0, totalRequests = 0
+      let totalCostCNY = 0, totalTokens = 0, totalPromptTokens = 0, totalCompletionTokens = 0, totalRequests = 0
 
       result.rows.forEach(r => {
         const p = Number(r.p_tokens), c = Number(r.c_tokens), count = Number(r.cnt)
-        totalCostUSD += calculateCost(r.model_name, p, c, count)
+        totalCostCNY += calculateCostCNY(r.model_name, p, c)
         totalTokens += (p + c)
         totalPromptTokens += p
         totalCompletionTokens += c
@@ -900,8 +893,8 @@ export function setupNewApiRoutes(app) {
 
       res.json({
         tokenName: userFilter.displayName,
-        totalCost: totalCostUSD,
-        totalCostCNY: totalCostUSD * EXCHANGE_RATE,
+        totalCost: totalCostCNY / EXCHANGE_RATE,
+        totalCostCNY,
         totalTokens, totalPromptTokens, totalCompletionTokens, totalRequests
       })
     } catch (err) {
@@ -919,33 +912,33 @@ export function setupNewApiRoutes(app) {
       const dayEnd = dayStart + 86400
 
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
+        FROM logs
         WHERE type = 2 AND ${userFilter.whereExpr} AND created_at >= $2 AND created_at < $3
         GROUP BY model_name
       `, [userFilter.params[0], dayStart, dayEnd])
 
-      let totalCostUSD = 0, totalTokens = 0, totalPromptTokens = 0, totalCompletionTokens = 0, totalRequests = 0
+      let totalCostCNY = 0, totalTokens = 0, totalPromptTokens = 0, totalCompletionTokens = 0, totalRequests = 0
       const models = []
 
       result.rows.forEach(r => {
         const p = Number(r.p_tokens), c = Number(r.c_tokens), count = Number(r.cnt)
-        const cost = calculateCost(r.model_name, p, c, count)
-        totalCostUSD += cost
+        const costCNY = calculateCostCNY(r.model_name, p, c)
+        totalCostCNY += costCNY
         totalTokens += (p + c)
         totalPromptTokens += p
         totalCompletionTokens += c
         totalRequests += count
-        models.push({ modelName: r.model_name, costCNY: cost * EXCHANGE_RATE, tokens: p + c, requests: count })
+        models.push({ modelName: r.model_name, costCNY, tokens: p + c, requests: count })
       })
 
       res.json({
         tokenName: userFilter.displayName,
-        date, totalCost: totalCostUSD, totalCostCNY: totalCostUSD * EXCHANGE_RATE,
+        date, totalCost: totalCostCNY / EXCHANGE_RATE, totalCostCNY,
         totalTokens, totalPromptTokens, totalCompletionTokens, totalRequests,
         models: models.sort((a, b) => b.costCNY - a.costCNY)
       })
@@ -1124,15 +1117,15 @@ export function setupNewApiRoutes(app) {
       }
 
       const result = await pgPool.query(`
-        SELECT 
+        SELECT
           ${timeBucketExpr} as time_bucket,
           model_name,
           SUM(prompt_tokens) as p_tokens,
           SUM(completion_tokens) as c_tokens,
           COUNT(*) as cnt
-        FROM logs 
-        WHERE type = 2 
-          AND created_at >= $1 
+        FROM logs
+        WHERE type = 2
+          AND created_at >= $1
           AND created_at < $2
         GROUP BY time_bucket, model_name
         ORDER BY time_bucket
@@ -1190,10 +1183,10 @@ export function setupNewApiRoutes(app) {
           costCNY: 0
         }
 
-        const costUSD = calculateCost(r.model_name, promptTokens, completionTokens, requests)
+        const costCNY = calculateCostCNY(r.model_name, p, c)
         prev.value += requests
         prev.tokens += totalTokens
-        prev.costCNY += costUSD * EXCHANGE_RATE
+        prev.costCNY += costCNY
         modelStatsMap.set(r.model_name, prev)
       })
 
@@ -1211,5 +1204,5 @@ export function setupNewApiRoutes(app) {
     }
   })
 
-  return { pgPool, calculateCost, refreshPricingConfig }
+  return { pgPool, calculateCostCNY, refreshPricingConfig }
 }

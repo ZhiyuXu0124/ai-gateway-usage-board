@@ -49,3 +49,15 @@ server/daily-report-state.json
 
 # Screenshots
 *.png
+
+# Upstream model change tracking (local only, contains sensitive notification data)
+upstream-model-changes/
+
+# Docker image tarballs
+*.tar
+
+# Playwright MCP
+.playwright-mcp/
+
+# Claude
+.claude/

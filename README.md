@@ -125,6 +125,7 @@ docker compose up -d --build
 
 - 镜像名：`ai-gateway-usage-board`
 - 容器名：`ai-gateway-usage-board`
+- 本地 `docker-compose.yml` 默认设置 `FEISHU_DISABLED=1`，避免本地容器与远端正式环境重复推送
 
 启动后访问：
 
@@ -135,6 +136,7 @@ docker compose up -d --build
 - `3001` 在容器内部监听，但默认**不再暴露到宿主机**
 - 页面访问只需要 `5173`
 - 如果需要手动触发飞书推送，请使用容器内命令（见下方）
+- 如果是部署到服务器，请使用 `docker-compose.deploy.yml`（不会默认关闭飞书）
 
 停止服务：
 

@@ -751,7 +751,9 @@ testConnection().then(async () => {
     }
   })
 
-  if (!process.env.FEISHU_WEBHOOK_URL) {
+  if (String(process.env.FEISHU_DISABLED || '').trim() === '1') {
+    console.log('Feishu notification disabled: FEISHU_DISABLED=1')
+  } else if (!process.env.FEISHU_WEBHOOK_URL) {
     console.log('Feishu notification disabled: FEISHU_WEBHOOK_URL not set')
   }
 

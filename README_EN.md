@@ -123,6 +123,7 @@ docker compose up -d --build
 
 - Image name: `ai-gateway-usage-board`
 - Container name: `ai-gateway-usage-board`
+- Local `docker-compose.yml` sets `FEISHU_DISABLED=1` by default to avoid duplicate Feishu pushes from local Docker
 
 After startup:
 
@@ -133,6 +134,7 @@ Notes:
 - Port `3001` still listens inside the container, but is **not exposed to the host by default**
 - Normal browser usage only needs `5173`
 - If you need to trigger Feishu manually, use the in-container command below
+- For server deployment, use `docker-compose.deploy.yml` (it does not disable Feishu by default)
 
 Stop all services:
 

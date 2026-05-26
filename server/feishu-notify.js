@@ -394,8 +394,13 @@ async function postToFeishu(webhookUrl, payload) {
 
 export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig }) {
   const getThreshold = () => Number(process.env.FEISHU_ALERT_THRESHOLD) || 100
+  const isFeishuDisabled = () => String(process.env.FEISHU_DISABLED || '').trim() === '1'
 
   async function sendDailyReport(overrideDate) {
+    if (isFeishuDisabled()) {
+      return { success: false, reason: 'FEISHU_DISABLED=1' }
+    }
+
     const webhookUrl = process.env.FEISHU_WEBHOOK_URL
     const threshold = getThreshold()
     const userMapping = parseUserMapping()
