@@ -163,7 +163,7 @@ function getTodayRange() {
   return { dateStr, dayStart, dayEnd }
 }
 
-async function getUserActivity(pgPool, calculateCost, dayStart, dayEnd) {
+async function getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd) {
   // 获取今日活跃用户详情
   const todayResult = await pgPool.query(`
     SELECT 
@@ -198,8 +198,7 @@ async function getUserActivity(pgPool, calculateCost, dayStart, dayEnd) {
     const p = Number(r.p_tokens)
     const c = Number(r.c_tokens)
     const count = Number(r.cnt)
-    const costUSD = calculateCost(r.model_name, p, c, count)
-    const costCNY = costUSD * EXCHANGE_RATE
+    const costCNY = calculateCostCNY(r.model_name, p, c)
 
     const tokenId = Number(r.token_id)
 
@@ -392,7 +391,7 @@ async function postToFeishu(webhookUrl, payload) {
   return { success: false, error: 'Feishu notification retry exhausted', attempts: maxAttempts }
 }
 
-export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig }) {
+export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConfig }) {
   const getThreshold = () => Number(process.env.FEISHU_ALERT_THRESHOLD) || 100
   const isFeishuDisabled = () => String(process.env.FEISHU_DISABLED || '').trim() === '1'
 
@@ -422,7 +421,7 @@ export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig 
     try {
       await refreshPricingConfig(pgPool)
 
-      const userActivity = await getUserActivity(pgPool, calculateCost, dayStart, dayEnd)
+      const userActivity = await getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd)
 
       const result = await pgPool.query(`
         SELECT l.token_id,
@@ -445,8 +444,7 @@ export function setupFeishuNotify({ pgPool, calculateCost, refreshPricingConfig 
         const p = Number(r.p_tokens)
         const c = Number(r.c_tokens)
         const count = Number(r.cnt)
-        const costUSD = calculateCost(r.model_name, p, c, count)
-        const costCNY = costUSD * EXCHANGE_RATE
+        const costCNY = calculateCostCNY(r.model_name, p, c)
 
         const tokenId = Number(r.token_id)
 
