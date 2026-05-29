@@ -1,7 +1,7 @@
 import { EXCHANGE_RATE } from './newapi.js'
 
-const MAX_TOKENS_IN_CARD = 20
-const MAX_MODELS_PER_TOKEN = 10
+const MAX_TOKENS_IN_CARD = 10
+const MAX_MODELS_PER_TOKEN = 5
 const MAX_BITABLE_BATCH = 500
 const FEISHU_RETRYABLE_CODES = new Set([11232])
 
@@ -163,10 +163,14 @@ function getTodayRange() {
   return { dateStr, dayStart, dayEnd }
 }
 
-async function getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd) {
-  // 获取今日活跃用户详情
+async function getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd, groups = []) {
+  const groupFilter = groups.length > 0
+    ? `AND l."group" IN (${groups.map((_, i) => `$${i + 3}`).join(',')})`
+    : ''
+  const queryParams = [dayStart, dayEnd, ...groups]
+
   const todayResult = await pgPool.query(`
-    SELECT 
+    SELECT
       l.token_id,
       ${getTokenDisplayExpr()} as token_name,
       l.model_name,
@@ -179,17 +183,22 @@ async function getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd) {
       AND l.token_id IS NOT NULL
       AND l.created_at >= $1
       AND l.created_at < $2
+      ${groupFilter}
     GROUP BY l.token_id, l.model_name
-  `, [dayStart, dayEnd])
+  `, queryParams)
 
-  // 获取历史用户（今日之前有过记录的用户）
+  const historyFilter = groups.length > 0
+    ? `AND "group" IN (${groups.map((_, i) => `$${i + 2}`).join(',')})`
+    : ''
+
   const historyResult = await pgPool.query(`
     SELECT DISTINCT token_id
     FROM logs
-    WHERE type = 2 
+    WHERE type = 2
       AND token_id IS NOT NULL
       AND created_at < $1
-  `, [dayStart])
+      ${historyFilter}
+  `, [dayStart, ...groups])
 
   const historySet = new Set(historyResult.rows.map(r => Number(r.token_id)))
   
@@ -308,19 +317,15 @@ function buildCard(dateStr, tokens, summary, threshold, userActivity, userMappin
 
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i]
-      let modelTable = '| 模型 | Tokens | 调用 | 费用(¥) |\n|---|---|---|---|\n'
       const displayModels = token.models.slice(0, MAX_MODELS_PER_TOKEN)
-      for (const m of displayModels) {
-        modelTable += `| ${m.modelName} | ${formatNumber(m.tokens)} | ${m.requests} | ${m.costCNY.toFixed(2)} |\n`
-      }
+      const modelLines = displayModels.map(m => `  · ${m.modelName} — ${formatNumber(m.tokens)} tokens / ${m.requests}次 / ¥${m.costCNY.toFixed(2)}`)
       if (token.models.length > MAX_MODELS_PER_TOKEN) {
-        const remaining = token.models.length - MAX_MODELS_PER_TOKEN
-        modelTable += `| ...及其他 ${remaining} 个模型 | | | |\n`
+        modelLines.push(`  · ...及其他 ${token.models.length - MAX_MODELS_PER_TOKEN} 个模型`)
       }
 
       elements.push({
         tag: 'markdown',
-        content: `**Top ${i + 1} · ${token.tokenName}** — ¥${token.totalCostCNY.toFixed(2)}\n调用 ${token.totalRequests} 次 | Tokens ${formatNumber(token.totalTokens)}\n\n${modelTable}`
+        content: `**Top ${i + 1} · ${token.tokenName}** — ¥${token.totalCostCNY.toFixed(2)}\n调用 ${token.totalRequests} 次 | Tokens ${formatNumber(token.totalTokens)}\n${modelLines.join('\n')}`
       })
       if (i < tokens.length - 1) {
         elements.push({ tag: 'hr' })
@@ -394,6 +399,7 @@ async function postToFeishu(webhookUrl, payload) {
 export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConfig }) {
   const getThreshold = () => Number(process.env.FEISHU_ALERT_THRESHOLD) || 100
   const isFeishuDisabled = () => String(process.env.FEISHU_DISABLED || '').trim() === '1'
+  const getReportGroups = () => (process.env.FEISHU_REPORT_GROUPS || 'IT,AI_Team').split(',').map(s => s.trim()).filter(Boolean)
 
   async function sendDailyReport(overrideDate) {
     if (isFeishuDisabled()) {
@@ -421,7 +427,12 @@ export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConf
     try {
       await refreshPricingConfig(pgPool)
 
-      const userActivity = await getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd)
+      const groups = getReportGroups()
+      const userActivity = await getUserActivity(pgPool, calculateCostCNY, dayStart, dayEnd, groups)
+
+      const groupFilter = groups.length > 0
+        ? `AND l."group" IN (${groups.map((_, i) => `$${i + 3}`).join(',')})`
+        : ''
 
       const result = await pgPool.query(`
         SELECT l.token_id,
@@ -436,8 +447,9 @@ export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConf
           AND l.token_id IS NOT NULL
           AND l.created_at >= $1
           AND l.created_at < $2
+          ${groupFilter}
         GROUP BY l.token_id, l.model_name
-      `, [dayStart, dayEnd])
+      `, [dayStart, dayEnd, ...groups])
 
       const tokenMap = {}
       for (const r of result.rows) {
