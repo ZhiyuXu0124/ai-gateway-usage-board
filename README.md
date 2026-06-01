@@ -81,8 +81,11 @@ FEISHU_BITABLE_APP_TOKEN=app_xxx
 FEISHU_BITABLE_TABLE_ID=tbl_xxx
 FEISHU_BITABLE_DATE_FIELD=时间
 FEISHU_BITABLE_PERSON_FIELD=人员
-FEISHU_BITABLE_COST_FIELD=消耗金额
-FEISHU_BITABLE_REMARK_FIELD=超额报备
+FEISHU_BITABLE_COST_FIELD=今日消耗
+# 多维表格完整地址（私信「前往填写」按钮的跳转目标，不填则按 app_token+table_id 拼接）
+FEISHU_BITABLE_URL=https://your-domain.feishu.cn/base/app_xxx?table=tbl_xxx
+# 超额同事私信提醒：设为 1 时每日给当天超额且有 open_id 映射的同事单独发卡片私信，默认关闭
+FEISHU_NOTIFY_OVERAGE_DM=0
 
 # 服务端口
 PORT=3001

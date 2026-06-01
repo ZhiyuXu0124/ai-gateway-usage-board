@@ -26,8 +26,7 @@ const FIELD_GROUPS = [
       { key: 'FEISHU_BITABLE_TABLE_ID', label: 'Bitable Table ID', placeholder: 'tbl_xxx' },
       { key: 'FEISHU_BITABLE_DATE_FIELD', label: '日期字段名', placeholder: '时间' },
       { key: 'FEISHU_BITABLE_PERSON_FIELD', label: '人员字段名', placeholder: '人员' },
-      { key: 'FEISHU_BITABLE_COST_FIELD', label: '金额字段名', placeholder: '消耗金额' },
-      { key: 'FEISHU_BITABLE_REMARK_FIELD', label: '报备字段名', placeholder: '超额报备' }
+      { key: 'FEISHU_BITABLE_COST_FIELD', label: '金额字段名', placeholder: '今日消耗' }
     ]
   }
 ]

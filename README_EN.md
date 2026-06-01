@@ -81,7 +81,10 @@ FEISHU_BITABLE_TABLE_ID=tbl_xxx
 FEISHU_BITABLE_DATE_FIELD=Time
 FEISHU_BITABLE_PERSON_FIELD=Person
 FEISHU_BITABLE_COST_FIELD=Cost
-FEISHU_BITABLE_REMARK_FIELD=OverBudgetNote
+# Full bitable URL (target of the "Go fill in" button in DMs; falls back to app_token+table_id if unset)
+FEISHU_BITABLE_URL=https://your-domain.feishu.cn/base/app_xxx?table=tbl_xxx
+# Over-budget DM reminder: when set to 1, sends each over-budget user (with an open_id mapping) a card DM daily. Off by default.
+FEISHU_NOTIFY_OVERAGE_DM=0
 
 # Server Port
 PORT=3001

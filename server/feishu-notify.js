@@ -1,4 +1,18 @@
 import { EXCHANGE_RATE } from './newapi.js'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// 静态姓名→open_id 映射：运行时 search/v1/user API 需要 user_access_token，
+// 且应用缺少 contact 读权限，故改用预生成的静态映射文件（随镜像打包）。
+let staticOpenIdMap = {}
+try {
+  staticOpenIdMap = JSON.parse(readFileSync(join(__dirname, 'feishu-user-openids.json'), 'utf-8'))
+} catch (err) {
+  console.warn('feishu-user-openids.json load failed:', err.message)
+}
 
 const MAX_TOKENS_IN_CARD = 10
 const MAX_MODELS_PER_TOKEN = 5
@@ -34,12 +48,12 @@ function parseUserMapping() {
   return {}
 }
 
-function buildMentionLine(tokens, userMapping) {
+function buildMentionLine(tokens) {
   if (!tokens || tokens.length === 0) return ''
 
   const mentions = tokens
     .map((t) => {
-      const mappedId = userMapping[t.tokenName]
+      const mappedId = resolveUserOpenId(t.tokenName)
       if (mappedId) {
         return `<at user_id="${mappedId}">${t.tokenName}</at>`
       }
@@ -99,6 +113,22 @@ async function getTenantAccessToken() {
   return tenantTokenCache.value
 }
 
+const userOpenIdCache = new Map()
+
+// 解析姓名对应的 open_id：优先用 FEISHU_USER_MAPPING 环境变量覆盖，
+// 其次用静态映射文件（feishu-user-openids.json）。未命中返回 null（不缓存，
+// 以便运行时通过配置页热更新 FEISHU_USER_MAPPING 后即时生效）。
+function resolveUserOpenId(name) {
+  if (userOpenIdCache.has(name)) return userOpenIdCache.get(name)
+
+  const envMap = parseUserMapping()
+  const openId = envMap[name] || staticOpenIdMap[name] || null
+
+  // 仅缓存命中结果；null 不缓存，避免配置更新后仍返回旧的未命中。
+  if (openId) userOpenIdCache.set(name, openId)
+  return openId
+}
+
 async function writeBitableRecords(dateStr, tokens) {
   if (!hasBitableConfig() || !tokens || tokens.length === 0) {
     return { success: false, skipped: true, reason: 'missing config or empty tokens' }
@@ -110,18 +140,29 @@ async function writeBitableRecords(dateStr, tokens) {
 
   const dateField = process.env.FEISHU_BITABLE_DATE_FIELD || '时间'
   const personField = process.env.FEISHU_BITABLE_PERSON_FIELD || '人员'
-  const costField = process.env.FEISHU_BITABLE_COST_FIELD || '消耗金额'
-  const remarkField = process.env.FEISHU_BITABLE_REMARK_FIELD || '超额报备'
+  const costField = process.env.FEISHU_BITABLE_COST_FIELD || '今日消耗'
 
   const dateMs = new Date(dateStr + 'T00:00:00+08:00').getTime()
-  const records = tokens.map((t) => ({
-    fields: {
+
+  const records = []
+  const unmapped = []
+  for (const t of tokens) {
+    const fields = {
       [dateField]: dateMs,
-      [personField]: t.tokenName,
-      [costField]: Number(t.totalCostCNY.toFixed(4)),
-      [remarkField]: ''
+      [costField]: Number(t.totalCostCNY.toFixed(2))
     }
-  }))
+    const openId = resolveUserOpenId(t.tokenName)
+    if (openId) {
+      fields[personField] = [{ id: openId }]
+    } else {
+      unmapped.push(t.tokenName)
+    }
+    records.push({ fields })
+  }
+
+  if (unmapped.length > 0) {
+    console.warn(`多维表格写入：${unmapped.length} 个令牌无 open_id 映射，人员字段留空: ${unmapped.join(', ')}`)
+  }
 
   let created = 0
   for (let i = 0; i < records.length; i += MAX_BITABLE_BATCH) {
@@ -148,6 +189,92 @@ async function writeBitableRecords(dateStr, tokens) {
   }
 
   return { success: true, created }
+}
+
+// 构建超额提醒私信卡片（与已验证文案一致）：姓名 + 日期 + 消耗金额 + 表格按钮。
+function buildOverageDmCard(name, dateStr, costCNY, tableUrl) {
+  const elements = [
+    {
+      tag: 'div',
+      text: {
+        tag: 'lark_md',
+        content: `**${name}** 你好：\n你 **${dateStr}** 的 API 消耗为 **¥${costCNY.toFixed(2)}**，已超过报备阈值。\n请前往下方多维表格补充「使用情况说明」。`
+      }
+    }
+  ]
+  if (tableUrl) {
+    elements.push({
+      tag: 'action',
+      actions: [
+        { tag: 'button', text: { tag: 'plain_text', content: '前往填写' }, type: 'primary', url: tableUrl }
+      ]
+    })
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: { template: 'orange', title: { tag: 'plain_text', content: '⚠️ API 消耗超额提醒' } },
+    elements
+  }
+}
+
+// 给当天超额且有 open_id 映射的同事单独发飞书卡片私信，提示去多维表格补充说明。
+// 由 FEISHU_NOTIFY_OVERAGE_DM=1 控制开关（默认关，避免误打扰）；发送失败不阻断主流程。
+async function sendOverageDirectMessages(dateStr, tokens) {
+  if (String(process.env.FEISHU_NOTIFY_OVERAGE_DM || '').trim() !== '1') {
+    return { success: false, skipped: true, reason: 'FEISHU_NOTIFY_OVERAGE_DM != 1' }
+  }
+  if (!process.env.FEISHU_APP_ID || !process.env.FEISHU_APP_SECRET) {
+    return { success: false, skipped: true, reason: 'missing app credentials' }
+  }
+  if (!tokens || tokens.length === 0) {
+    return { success: false, skipped: true, reason: 'empty tokens' }
+  }
+
+  const tableUrl = process.env.FEISHU_BITABLE_URL
+    || (process.env.FEISHU_BITABLE_APP_TOKEN && process.env.FEISHU_BITABLE_TABLE_ID
+      ? `https://feishu.cn/base/${process.env.FEISHU_BITABLE_APP_TOKEN}?table=${process.env.FEISHU_BITABLE_TABLE_ID}`
+      : '')
+
+  const token = await getTenantAccessToken()
+  let sent = 0
+  const failed = []
+  const skipped = []
+
+  for (const t of tokens) {
+    const openId = resolveUserOpenId(t.tokenName)
+    if (!openId) {
+      skipped.push(t.tokenName)
+      continue
+    }
+
+    const card = buildOverageDmCard(t.tokenName, dateStr, t.totalCostCNY, tableUrl)
+    try {
+      const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receive_id: openId, msg_type: 'interactive', content: JSON.stringify(card) }),
+        signal: AbortSignal.timeout(10000)
+      })
+      const data = await resp.json()
+      if (data.code === 0) {
+        sent += 1
+      } else {
+        failed.push(`${t.tokenName}(${data.code})`)
+      }
+    } catch (err) {
+      failed.push(`${t.tokenName}(${err.message})`)
+    }
+  }
+
+  if (skipped.length > 0) {
+    console.warn(`超额私信：${skipped.length} 人无 open_id 映射，已跳过: ${skipped.join(', ')}`)
+  }
+  if (failed.length > 0) {
+    console.warn(`超额私信：${failed.length} 条发送失败: ${failed.join(', ')}`)
+  }
+  console.log(`超额私信：成功发送 ${sent} 条`)
+
+  return { success: true, sent, failed: failed.length, skipped: skipped.length }
 }
 
 function getTodayRange() {
@@ -255,7 +382,7 @@ function formatUserList(users, isNew = false) {
   return lines.join('\n')
 }
 
-function buildCard(dateStr, tokens, summary, threshold, userActivity, userMapping) {
+function buildCard(dateStr, tokens, summary, threshold, userActivity) {
   const header = {
     title: { tag: 'plain_text', content: `📊 API 消耗日报 — ${dateStr}` },
     template: 'blue'
@@ -268,17 +395,6 @@ function buildCard(dateStr, tokens, summary, threshold, userActivity, userMappin
     content: `**今日总览**\n👥 活跃令牌 **${summary.totalUsers}** 个 | 📡 调用 **${formatNumber(summary.totalRequests)}** 次 | 🔤 Tokens **${formatNumber(summary.totalTokens)}** | 💰 总消耗 **¥${summary.totalCostCNY.toFixed(2)}**`
   })
   elements.push({ tag: 'hr' })
-
-  if (tokens.length > 0) {
-    const mentionLine = buildMentionLine(tokens, userMapping)
-    if (mentionLine) {
-      elements.push({
-        tag: 'markdown',
-        content: `### ⚠️ 超预算提醒\n${mentionLine}\n请关注当日消耗并在「超额报备」中补充说明。`
-      })
-      elements.push({ tag: 'hr' })
-    }
-  }
 
   // 用户活跃度板块
   if (userActivity) {
@@ -408,7 +524,6 @@ export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConf
 
     const webhookUrl = process.env.FEISHU_WEBHOOK_URL
     const threshold = getThreshold()
-    const userMapping = parseUserMapping()
 
     if (!webhookUrl) {
       return { success: false, reason: 'FEISHU_WEBHOOK_URL not configured' }
@@ -502,22 +617,28 @@ export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConf
         t.models.sort((a, b) => b.costCNY - a.costCNY)
       }
 
-      const payload = buildCard(dateStr, filtered, summary, threshold, userActivity, userMapping)
+      const payload = buildCard(dateStr, filtered, summary, threshold, userActivity)
 
       // Check payload size (20KB limit for custom bot)
       const payloadStr = JSON.stringify(payload)
       if (payloadStr.length > 19000) {
         const truncated = filtered.slice(0, Math.max(5, Math.floor(filtered.length / 2)))
-        const truncatedPayload = buildCard(dateStr, truncated, summary, threshold, userActivity, userMapping)
+        const truncatedPayload = buildCard(dateStr, truncated, summary, threshold, userActivity)
         console.log(`卡片过大 (${payloadStr.length} bytes)，截断到 ${truncated.length} 个令牌`)
         const sendResult = await postToFeishu(webhookUrl, truncatedPayload)
 
         let bitableResult = { success: false, skipped: true, reason: 'notification failed or disabled' }
+        let dmResult = { success: false, skipped: true, reason: 'notification failed or disabled' }
         if (sendResult.success) {
           try {
             bitableResult = await writeBitableRecords(dateStr, truncated)
           } catch (bitableErr) {
             bitableResult = { success: false, error: bitableErr.message }
+          }
+          try {
+            dmResult = await sendOverageDirectMessages(dateStr, truncated)
+          } catch (dmErr) {
+            dmResult = { success: false, error: dmErr.message }
           }
         }
 
@@ -526,17 +647,24 @@ export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConf
           date: dateStr,
           tokensReported: truncated.length,
           truncated: true,
-          bitable: bitableResult
+          bitable: bitableResult,
+          dm: dmResult
         }
       }
 
       const sendResult = await postToFeishu(webhookUrl, payload)
       let bitableResult = { success: false, skipped: true, reason: 'notification failed or disabled' }
+      let dmResult = { success: false, skipped: true, reason: 'notification failed or disabled' }
       if (sendResult.success) {
         try {
           bitableResult = await writeBitableRecords(dateStr, filtered)
         } catch (bitableErr) {
           bitableResult = { success: false, error: bitableErr.message }
+        }
+        try {
+          dmResult = await sendOverageDirectMessages(dateStr, filtered)
+        } catch (dmErr) {
+          dmResult = { success: false, error: dmErr.message }
         }
       }
 
@@ -544,7 +672,8 @@ export function setupFeishuNotify({ pgPool, calculateCostCNY, refreshPricingConf
         ...sendResult,
         date: dateStr,
         tokensReported: filtered.length,
-        bitable: bitableResult
+        bitable: bitableResult,
+        dm: dmResult
       }
 
     } catch (err) {
